@@ -90,8 +90,8 @@ abstract class MainLora extends Base {
         LinearLayout th = new LinearLayout(this); th.setGravity(Gravity.CENTER_VERTICAL);
         th.addView(text("LoRAs", 20, TXT, true), new LinearLayout.LayoutParams(0, -2, 1));
         final TextView cnt = text("", 12, ACC, true); th.addView(cnt); v.addView(th);
-        v.addView(text(Tr.s(this, "On = the model loads this LoRA (switching reloads once) · the tag <lora:…> appears in the prompt when its trigger words are there · Auto = keep the tag even without them · long-press for trigger words, category, delete",
-                "激活＝让模型加载这个 LoRA（只有切换开关才会重载模型）；提示词里出现它的触发词时会自动写上 <lora:…> 标签；自动挂载＝即使没有触发词也保留标签；长按可编辑触发词、分类、删除"), 11, DIM, false));
+        v.addView(text(Tr.s(this, "On = the model loads it (switching reloads the model) · Smart = write <lora:…> while its trigger words are in the prompt · Tag = always write it, trigger words or not · long-press for trigger words, category, delete",
+                "启用＝让模型加载它（切换会重载模型，慢一次）；智能＝提示词里出现触发词时写入 <lora:…> 标签，触发词没了就撤掉；写标签＝不管有没有触发词都写入；长按可编辑触发词、分类、删除"), 11, DIM, false));
         final EditText filter = field(L.s("Фильтр: имя или слово…", "Filter: name or word…")); filter.setSingleLine(true); filter.setTextSize(15);
         LinearLayout.LayoutParams fl = new LinearLayout.LayoutParams(-1, -2); fl.topMargin = dp(10); fl.bottomMargin = dp(8); v.addView(filter, fl);
         final HorizontalScrollView catScroll = new HorizontalScrollView(this); catScroll.setHorizontalScrollBarEnabled(false); final LinearLayout catRow = new LinearLayout(this); catScroll.addView(catRow);
@@ -129,7 +129,8 @@ abstract class MainLora extends Base {
             LinearLayout l1 = new LinearLayout(this); l1.setGravity(Gravity.CENTER_VERTICAL);
             CheckBox cb = new CheckBox(this); cb.setButtonTintList(ColorStateList.valueOf(ACC)); cb.setChecked(on0); cb.setPadding(0, 0, 0, 0);
             l1.addView(cb);
-            l1.addView(text(Tr.s(this, "on", "激活"), 10, DIM, false));
+            l1.addView(text(Tr.s(this, "on", "启用"), 10, DIM, false));
+            TextView enHint = text(Tr.s(this, "reloads", "会重载"), 9, DIM, false); enHint.setAlpha(.7f); l1.addView(enHint);
             TextView tn = text(title, 15, TXT, true); tn.setSingleLine(true); tn.setEllipsize(android.text.TextUtils.TruncateAt.END);
             LinearLayout.LayoutParams tnl = new LinearLayout.LayoutParams(0, -2, 1); tnl.leftMargin = dp(8); l1.addView(tn, tnl);
             row.addView(l1);
@@ -143,10 +144,15 @@ abstract class MainLora extends Base {
             TextView pen = text("\u270e", 16, DIM, false); pen.setPadding(dp(6), dp(6), dp(12), dp(6));
             pen.setOnClickListener(x -> renameDialog(true, "anima/" + n, title0, () -> { dlg.dismiss(); loraLibrary(); }));
             l3.addView(pen);
-            final CheckBox ac = new CheckBox(this); ac.setButtonTintList(ColorStateList.valueOf(ACC)); ac.setChecked(LoraSync.auto(libf)); ac.setPadding(0, 0, 0, 0);
-            ac.setContentDescription(Tr.s(this, "mount for every picture", "每次生成都挂载"));
+            final CheckBox sc = new CheckBox(this); sc.setButtonTintList(ColorStateList.valueOf(ACC)); sc.setChecked(LoraSync.smart(libf)); sc.setPadding(0, 0, 0, 0);
+            sc.setContentDescription(Tr.s(this, "write the tag while the trigger words are in the prompt", "提示词里有触发词时写入标签"));
+            sc.setEnabled(!words.isEmpty()); sc.setAlpha(words.isEmpty() ? .35f : 1f);
+            l3.addView(sc);
+            l3.addView(text(Tr.s(this, "smart", "智能"), 10, DIM, false));
+            final CheckBox ac = new CheckBox(this); ac.setButtonTintList(ColorStateList.valueOf(ACC)); ac.setChecked(LoraSync.auto(libf)); ac.setPadding(dp(6), 0, 0, 0);
+            ac.setContentDescription(Tr.s(this, "always write the tag, trigger words or not", "无论有没有触发词都写入标签"));
             l3.addView(ac);
-            l3.addView(text(Tr.s(this, "auto", "自动挂载"), 11, DIM, false));
+            l3.addView(text(Tr.s(this, "tag", "写标签"), 10, DIM, false));
             l3.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1));
             EditText we = field(String.format(java.util.Locale.US, "%.2f", wdef)); we.setTextColor(TXT); we.setTextSize(13); we.setGravity(Gravity.CENTER); we.setSingleLine(true);
             we.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_DECIMAL); we.setPadding(dp(4), dp(4), dp(4), dp(4)); we.setBackground(bg(CARD, 10));
@@ -154,11 +160,12 @@ abstract class MainLora extends Base {
             TextView del = text("\u2715", 15, DIM, false); del.setPadding(dp(6), dp(6), dp(8), dp(6));
             del.setOnClickListener(x -> builder().setMessage(Tr.f(this, "Delete %s from the library?", "从 LoRA 库里删除 %s？", n))
                     .setNegativeButton(L.s("Отмена", "Cancel"), null)
-                    .setPositiveButton(Tr.s(this, "Delete", "删除"), (d, i) -> { if (cb.isChecked()) loraRemove(n, words); libf.delete(); LoraSync.cardFile(libf).delete(); dlg.dismiss(); loraLibrary(); }).show());
+                    .setPositiveButton(Tr.s(this, "Delete", "删除"), (d, i) -> { libf.delete(); LoraSync.cardFile(libf).delete(); dlg.dismiss(); loraLibrary(); }).show());
             l3.addView(del);
             row.addView(l3);
 
             ac.setOnCheckedChangeListener((b, on) -> { LoraSync.setAuto(libf, on); loraSync(); });
+            sc.setOnCheckedChangeListener((b, on) -> { LoraSync.setSmart(libf, on); loraSync(); });
             cb.setOnCheckedChangeListener((b, on) -> {
                 String w = we.getText().toString().trim().replace(',', '.'); if (w.isEmpty()) w = "1.00";
                 try { LoraSync.setWeight(libf, Float.parseFloat(w)); } catch (NumberFormatException ignored) { }
@@ -169,7 +176,7 @@ abstract class MainLora extends Base {
             });
             we.addTextChangedListener(watch(s -> { String w = s.trim().replace(',', '.'); try { float nv = Float.parseFloat(w); LoraSync.setWeight(libf, nv); if (cb.isChecked()) loraSetWeight(n, String.format(java.util.Locale.US, "%.2f", nv)); } catch (NumberFormatException ignored) { } }));
             tn.setOnClickListener(x -> cb.toggle());   // the name still mounts it; the buttons on the row keep their own taps
-            row.setOnLongClickListener(x -> { loraMenu(title, libf, words, () -> builder().setMessage(L.f("Удалить %s?", "Delete %s?", n)).setPositiveButton(L.s("Удалить", "Delete"), (d, i) -> { if (cb.isChecked()) loraRemove(n, words); libf.delete(); Civitai.metaFile(libf).delete(); dlg.dismiss(); loraLibrary(); }).setNegativeButton(L.s("Отмена", "Cancel"), null).show(), () -> { dlg.dismiss(); loraLibrary(); }); return true; });
+            row.setOnLongClickListener(x -> { loraMenu(title, libf, words, () -> builder().setMessage(L.f("Удалить %s?", "Delete %s?", n)).setPositiveButton(L.s("Удалить", "Delete"), (d, i) -> { libf.delete(); Civitai.metaFile(libf).delete(); dlg.dismiss(); loraLibrary(); }).setNegativeButton(L.s("Отмена", "Cancel"), null).show(), () -> { dlg.dismiss(); loraLibrary(); }); return true; });
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2); lp.bottomMargin = dp(6); list.addView(row, lp);
 
             rows.add(row); keys.add((n + " " + title + " " + words).toLowerCase(java.util.Locale.ROOT)); boxes.add(cb); rowCats.add(Civitai.category(f));
@@ -401,7 +408,9 @@ abstract class MainLora extends Base {
             .setNegativeButton(L.s("Отмена", "Cancel"), null).show();
     }
     void gptStyle() {
-        if (loraWeight(GPT_LORA) != null) {   // on -> off
+        File gptf = new File(AnimaLora.dir(getFilesDir()), GPT_LORA + ".safetensors");
+        boolean gptOn = gptf.isFile() && (LoraSync.on(gptf) || loraWeight(GPT_LORA) != null);
+        if (gptOn) {   // on -> off
             String p = loraTag(GPT_LORA).matcher(prompt.getText().toString()).replaceAll("");
             List<String> keep = new ArrayList<>(); for (String t : tokens(p)) if (!t.equalsIgnoreCase(GPT_TRIGGER)) keep.add(t);
             prompt.setText(android.text.TextUtils.join(", ", keep)); prompt.setSelection(prompt.getText().length()); return;
@@ -433,6 +442,7 @@ abstract class MainLora extends Base {
     }
     void gptApply() {
         File gf = new File(AnimaLora.dir(getFilesDir()), GPT_LORA + ".safetensors");
+        LoraSync.setSmart(gf, true);
         if (gf.isFile()) { LoraSync.setOn(gf, true); LoraSync.setWeight(gf, 0.8f); }   // mod: switched on, otherwise the engine would not load it
         List<String> cur = new ArrayList<>(); cur.add(GPT_TRIGGER); for (String t : tokens(prompt.getText().toString())) if (!t.equalsIgnoreCase(GPT_TRIGGER)) cur.add(t);
         cur.add("<lora:" + GPT_LORA + ":0.8>");

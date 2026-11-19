@@ -90,6 +90,24 @@ final class LoraSync {
         }
     }
 
+    /** smart mode: the tag follows the trigger words (added when one of them is in the prompt, taken out when they are gone) */
+    static boolean smart(File lora) {
+        try {
+            return card(lora).optBoolean("smart", true);
+        } catch (Throwable t) {
+            return true;
+        }
+    }
+
+    static void setSmart(File lora, boolean v) {
+        try {
+            JSONObject j = card(lora);
+            j.put("smart", v);
+            saveCard(lora, j);
+        } catch (Throwable ignored) {
+        }
+    }
+
     /** the strength of this file (1 unless the user set one) */
     static float weight(File lora) {
         try {
@@ -196,10 +214,10 @@ final class LoraSync {
     /**
      * The prompt with its {@code <lora:…>} tags brought in line with the library. Never touches what the engine loads.
      * <ul>
-     *   <li>not activated → its tag is taken out (an unactivated LoRA must not appear);</li>
-     *   <li>activated with trigger words → tag when one of them is in the prompt, no tag when they are gone;</li>
-     *   <li>activated with {@code auto} → tag always;</li>
-     *   <li>activated without trigger words → whatever the prompt has is kept, nothing is added unless {@code auto};</li>
+     *   <li>not enabled → its tag is taken out (the engine does not load it, so the tag would be a lie);</li>
+     *   <li>{@code "tag"} on → always written, trigger words or not;</li>
+     *   <li>{@code "smart"} on (the default) → written while one of its trigger words is in the prompt, taken out again when they are gone;</li>
+     *   <li>both off, or a LoRA without trigger words → whatever the prompt has is left alone, nothing is added;</li>
      *   <li>the pose adapter is left alone (the POSE section owns its tag).</li>
      * </ul>
      * A tag that is there keeps its place; a missing one is appended; a wrong strength is corrected to the card's.
@@ -212,13 +230,16 @@ final class LoraSync {
         for (File f : library(home)) {
             String n = name(f);
             if (n.equalsIgnoreCase(Pose.LORA)) continue;   // the pose adapter's tag belongs to the POSE section
-            boolean has = called(out, n), act = on(f), auto = auto(f), hasW = !Civitai.words(f).isEmpty();
+            boolean has = called(out, n), act = on(f), auto = auto(f), smrt = smart(f), hasW = !Civitai.words(f).isEmpty();
+            boolean hitW = hasW && triggered(f, out);
             boolean want;
-            if (!act) want = false;
-            else if (hasW) want = auto || triggered(f, out);
-            else want = auto || has;
+            if (!act) want = false;                                   // switched off: the engine does not load it, so no tag either
+            else want = auto || (smrt && hitW);                       // "always tag" or "smart: tag while the trigger words are there"
             if (!want) {
-                if (has) { out = tagPattern(n).matcher(out).replaceAll(""); changed = true; }
+                // smart mode takes its own tags back out when the trigger words are gone; a tag the user typed for a LoRA with
+                // smart mode off (or for one without trigger words) is left alone
+                if (has && act && smrt && hasW) { out = tagPattern(n).matcher(out).replaceAll(""); changed = true; }
+                else if (has && !act) { out = tagPattern(n).matcher(out).replaceAll(""); changed = true; }
                 continue;
             }
             if (!has) {
@@ -251,7 +272,7 @@ final class LoraSync {
         StringBuilder sb = new StringBuilder();
         for (File f : library(home)) {
             if (!on(f) || called(p, name(f))) continue;
-            boolean want = auto(f) || triggered(f, p);
+            boolean want = auto(f) || (smart(f) && triggered(f, p));
             if (!want) continue;
             if (sb.length() > 0) sb.append(" · ");
             sb.append(name(f)).append(' ').append(fmt(weight(f)));
