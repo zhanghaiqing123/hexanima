@@ -66,14 +66,22 @@ public class Main extends MainEdit {
     int batchDisplayIndex;
     android.view.GestureDetector batchGestures;
 
-    /** LoRAs called from the current prompt with <lora:name:weight> (file*weight items), set by runOne */
-    String mp() {
-        // the selected LoRA and the prompt's <lora:...> ones are part of the loaded model: anima.sh reloads it when the list changes
+    /** mod: what the engine loads — the ACTIVATED library LoRAs (plus the pose adapter). It does not depend on the prompt, so editing a
+     *  prompt never reloads the model; only flipping a switch in the library does, which is what the user asked for. */
+    List<String> loraEnvList() {
         List<String> ls = new ArrayList<>();
-        if (!isMoss() && loraFitsModel()) {
-            if (loraOn()) ls.add(loraSrc().getPath() + "*" + String.format(java.util.Locale.US, "%.2f", loraStr()));
-            for (String t : tagLoras) if (!ls.contains(t)) ls.add(t);
+        if (isMoss() || !loraFitsModel()) return ls;
+        if (loraOn()) ls.add(loraSrc().getPath() + "*" + String.format(java.util.Locale.US, "%.2f", loraStr()));   // the old single slot, empty after the migration
+        for (String t : LoraSync.env(getFilesDir())) if (!ls.contains(t)) ls.add(t);
+        if (Pose.supported() && Pose.active(this)) {   // the pose adapter is not a library entry: it belongs to the POSE section
+            String t = Pose.loraFile(this).getPath() + "*1.00";
+            if (!ls.contains(t)) ls.add(t);
         }
+        return ls;
+    }
+    /** the model parameters: anima.sh reloads the model when the LORA list changes */
+    String mp() {
+        List<String> ls = loraEnvList();
         String lora = ls.isEmpty() ? "" : "LORA=" + q(String.join("|", ls)) + " ";
         return "MID=" + model + " MDIR=m_" + model + " IDLE=" + Settings.idleMin(this) * 60 + " " + lora + (Settings.lowRam(this) ? "MEGA_STREAM=1 " : "") + (Settings.coolMode(this).equals("on") ? "MEGA_COOL=1 " : "");
     }
@@ -808,21 +816,23 @@ public class Main extends MainEdit {
 
     void refreshLora() {
         if (loraName == null) return;
-        if (!isMoss()) {   // mod: Anima — the card shows what the prompt calls right now, not one hidden "selected" file
+        if (!isMoss()) {   // mod: Anima — the card shows what the engine loads (the activated files), not one hidden "selected" file
             String p = prompt == null ? "" : prompt.getText().toString();
-            String mounted = LoraSync.mounted(getFilesDir(), p), auto = LoraSync.summary(getFilesDir(), p);
-            boolean any = !mounted.isEmpty();
-            loraName.setText(any ? mounted : L.s("не выбрана", "none"));
+            String loaded = LoraSync.loaded(getFilesDir()), inPrompt = LoraSync.inPrompt(getFilesDir(), p), pending = LoraSync.pending(getFilesDir(), p);
+            boolean any = !loaded.isEmpty();
+            loraName.setText(any ? loaded : L.s("не выбрана", "none"));
             loraName.setTextColor(any ? TXT : DIM);
-            loraInfo.setText(any ? Tr.f(this, "Called by the prompt: %s", "提示词已调用：%s", mounted)
-                    : Tr.s(this, "Tap the name: mount or unmount a LoRA of the library. Long-press a LoRA in the library for its trigger words.",
-                              "点名字可从库里挂载/取消挂载 LoRA。触发词、分类、删除在库界面长按该 LoRA。"));
+            loraInfo.setText(any ? (inPrompt.isEmpty() ? Tr.s(this, "No <lora:…> tag in the prompt yet: it is added when a trigger word appears.",
+                            "提示词里还没有 <lora:…> 标签：出现触发词时会自动补上。")
+                            : Tr.f(this, "In the prompt: %s", "提示词里已标注：%s", inPrompt))
+                    : Tr.s(this, "Tap the name: switch a LoRA of the library on or off. Switching is the only thing that reloads the model.",
+                              "点名字可选择库里哪些 LoRA 被加载。只有切换开关才会重载模型，改提示词不会。"));
             loraInfo.setTextColor(any ? OK : DIM);
             if (loraAuto != null) {
-                loraAuto.setText(auto.isEmpty() ? "" : Tr.f(this, "Will be added to this picture: %s", "本次生成会自动补上：%s", auto));
-                loraAuto.setVisibility(auto.isEmpty() ? View.GONE : View.VISIBLE);
+                loraAuto.setText(pending.isEmpty() ? "" : Tr.f(this, "Will be added to this picture: %s", "本次生成会自动补上：%s", pending));
+                loraAuto.setVisibility(pending.isEmpty() ? View.GONE : View.VISIBLE);
             }
-            loraFold.sum.setText(any ? mounted : L.s("нет", "none"));
+            loraFold.sum.setText(any ? loaded : L.s("нет", "none"));
             loraFold.sum.setTextColor(any ? ACC : DIM);
             loraDrop.setVisibility(any || !LoraSync.library(getFilesDir()).isEmpty() ? View.VISIBLE : View.GONE);
             File sel = loraSelFile();
@@ -1042,30 +1052,33 @@ public class Main extends MainEdit {
     }
     /** mod: the single "selected file" slot of older versions becomes "automatic" on that file's card, then the slot is cleared */
     void migrateLoraSlot() {
-        if (prefs().getBoolean("lora_migrated_v7", false)) return;
-        try {
-            String id = prefs().getString("anima_lora_id", "");
-            String file = prefs().getString("anima_lora_file", "");
-            if (!id.isEmpty() && !file.isEmpty()) {
-                File f = new File(AnimaLora.dir(getFilesDir()), file);
-                if (f.isFile()) {   // the tag itself is written by LoraSync.ensure at the next picture, so the prompt is not touched here
-                    LoraSync.setAuto(f, true);
-                    LoraSync.setWeight(f, prefs().getFloat("anima_lora_str", 1f));
+        // v7: the one "selected file" slot of older versions became an automatic entry on that file's card
+        if (!prefs().getBoolean("lora_migrated_v7", false)) {
+            try {
+                String id = prefs().getString("anima_lora_id", "");
+                String file = prefs().getString("anima_lora_file", "");
+                if (!id.isEmpty() && !file.isEmpty()) {
+                    File f = new File(AnimaLora.dir(getFilesDir()), file);
+                    if (f.isFile()) {
+                        LoraSync.setAuto(f, true);
+                        LoraSync.setWeight(f, prefs().getFloat("anima_lora_str", 1f));
+                    }
                 }
-            }
-        } catch (Throwable ignored) { }
-        prefs().edit().remove("anima_lora_id").remove("anima_lora_name").remove("anima_lora_info").putBoolean("lora_migrated_v7", true).apply();
-    }
-    /** mod: mount the file's tag (+ its trigger words) in the prompt */
-    void addLoraTag(File f) {
-        String n = LoraSync.name(f);
-        loraAdd(n, String.format(java.util.Locale.US, "%.2f", LoraSync.weight(f)), Civitai.words(f));
-    }
-    /** mod: take every <lora:…> tag out of the prompt */
-    void clearLoraTags() {
-        String p = LoraSync.TAG.matcher(prompt.getText().toString()).replaceAll("");
-        List<String> keep = tokens(p);
-        prompt.setText(android.text.TextUtils.join(", ", keep)); prompt.setSelection(prompt.getText().length());
+            } catch (Throwable ignored) { }
+            prefs().edit().remove("anima_lora_id").remove("anima_lora_name").remove("anima_lora_info").putBoolean("lora_migrated_v7", true).apply();
+        }
+        // v8: the switch ("on") became the thing that decides what the engine loads. First run: everything the prompt already calls is on,
+        // plus anything that was marked automatic — so the library starts in the state the user last saw.
+        if (!prefs().getBoolean("lora_migrated_v8", false)) {
+            try {
+                String p = prompt == null ? "" : prompt.getText().toString();
+                for (File f : LoraSync.library(getFilesDir())) {
+                    if (LoraSync.card(f).has("on")) continue;
+                    LoraSync.setOn(f, LoraSync.auto(f) || LoraSync.called(p, LoraSync.name(f)));
+                }
+            } catch (Throwable ignored) { }
+            prefs().edit().putBoolean("lora_migrated_v8", true).apply();
+        }
     }
     /** mod: the drop-down of the Anima LoRA card — every library file, ticked when the prompt calls it; a tap mounts or unmounts it */
     void loraPicker() {
@@ -1076,18 +1089,28 @@ public class Main extends MainEdit {
         for (int i = 0; i < lib.size(); i++) {
             File f = lib.get(i);
             String n = LoraSync.name(f), words = Civitai.words(f);
-            boolean on = LoraSync.called(prompt.getText().toString(), n);
+            boolean on = LoraSync.on(f);
             items[i] = (on ? "✓ " : "") + n + "  " + String.format(java.util.Locale.US, "%.2f", LoraSync.weight(f))
                     + (LoraSync.auto(f) ? "  ⚡" : "") + (words.isEmpty() ? "" : "  ·  " + (words.length() > 34 ? words.substring(0, 34) + "…" : words));
         }
-        builder().setTitle(Tr.s(this, "LoRAs of the prompt", "提示词里的 LoRA")).setItems(items, (d, i) -> {
+        builder().setTitle(Tr.s(this, "LoRAs loaded by the model", "模型加载哪些 LoRA")).setItems(items, (d, i) -> {
             File f = lib.get(i);
-            String n = LoraSync.name(f);
-            if (LoraSync.called(prompt.getText().toString(), n)) loraRemove(n, Civitai.words(f));
-            else { addLoraTag(f); prefs().edit().putString("anima_lora_sel", n).apply(); }
-            refreshLora();
+            LoraSync.setOn(f, !LoraSync.on(f));   // the only thing that reloads the model
+            prefs().edit().putString("anima_lora_sel", LoraSync.name(f)).apply();
+            loraSync();
         }).setNeutralButton(Tr.s(this, "Library…", "库…"), (d, k) -> loraLibrary())
                 .setNegativeButton(L.s("Отмена", "Cancel"), null).show();
+    }
+    /** mod: bring the prompt's <lora:…> tags in line with the library and refresh the card (MainLora calls this after a switch) */
+    void loraSync() {
+        String now = prompt.getText().toString();
+        String next = LoraSync.sync(getFilesDir(), now);
+        if (!next.equals(now)) {
+            int sel = prompt.getSelectionEnd();
+            prompt.setText(next);
+            prompt.setSelection(Math.max(0, Math.min(sel, prompt.getText().length())));
+        }
+        refreshLora();
     }
     /** mod: ✕ of the Anima card — unmount everything, or delete one file, each after a confirmation */
     void dropLoraAsk() {
@@ -1099,18 +1122,20 @@ public class Main extends MainEdit {
         }
         final File sel = loraSelFile();
         List<String> items = new ArrayList<>();
-        items.add(Tr.s(this, "Unmount every LoRA from the prompt", "取消挂载提示词里的全部 LoRA"));
+        items.add(Tr.s(this, "Switch every LoRA off (reloads once)", "全部关闭（会重载一次模型）"));
         if (sel != null) items.add(Tr.f(this, "Delete the file of %s", "删除 %s 的文件", LoraSync.name(sel)));
         builder().setTitle("LoRA").setItems(items.toArray(new String[0]), (d, i) -> {
-            if (i == 0) { clearLoraTags(); refreshLora(); return; }
+            if (i == 0) {
+                for (File f : LoraSync.library(getFilesDir())) LoraSync.setOn(f, false);
+                loraSync(); return;
+            }
             builder().setMessage(Tr.f(this, "Delete %s from the library? The file leaves the phone.", "从 LoRA 库里删除 %s？文件会从手机里移除。", LoraSync.name(sel)))
                     .setNegativeButton(L.s("Отмена", "Cancel"), null)
                     .setPositiveButton(Tr.s(this, "Delete", "删除"), (d2, k) -> {
                         String n = LoraSync.name(sel);
                         sel.delete(); LoraSync.cardFile(sel).delete();
                         if (n.equalsIgnoreCase(loraSel())) prefs().edit().remove("anima_lora_sel").apply();
-                        loraRemove(n, "");
-                        refreshLora();
+                        loraSync();
                     }).show();
         }).setNegativeButton(L.s("Отмена", "Cancel"), null).show();
     }
@@ -1141,8 +1166,15 @@ public class Main extends MainEdit {
             }
             src.delete(); tmp.renameTo(src);
             final String tag = src.getName().replaceAll("\\.safetensors$", "");
-            prefs().edit().putString(pre + "lora_id", Long.toHexString(System.currentTimeMillis())).putString(pre + "lora_name", name).putString("anima_lora_file", moss ? prefs().getString("anima_lora_file", "user.safetensors") : src.getName())
-                .putString(pre + "lora_info", "✓ " + msg + (moss ? "" : "\n" + L.f("В промпте: <lora:%s:1.0>", "In the prompt: <lora:%s:1.0>", tag))).apply();
+            if (moss) {
+                prefs().edit().putString(pre + "lora_id", Long.toHexString(System.currentTimeMillis())).putString(pre + "lora_name", name)
+                        .putString("anima_lora_file", prefs().getString("anima_lora_file", "user.safetensors")).putString(pre + "lora_info", "✓ " + msg).apply();
+            } else {
+                // mod: an imported file joins the library SWITCHED ON with strength 1; the prompt gets its tag only when its trigger words appear
+                LoraSync.setOn(src, true);
+                if (!LoraSync.card(src).has("w")) LoraSync.setWeight(src, prefs().getFloat(pre + "lora_str", 1f));
+                prefs().edit().putString("anima_lora_sel", tag).apply();
+            }
             ui.post(this::refreshLora);
         });
     }
@@ -1587,9 +1619,9 @@ public class Main extends MainEdit {
         if (bad != null) { Toast.makeText(this, bad, Toast.LENGTH_LONG).show(); return; }
         if (cw != resW || ch != resH) setRes(cw, ch);
         if (prompt.getText().toString().trim().isEmpty()) { Toast.makeText(this, L.s("Введите описание", "Enter a prompt"), Toast.LENGTH_SHORT).show(); return; }
-        // mod: the LoRAs marked automatic, and those whose trigger words are in the prompt, get their <lora:name:weight> written here (visible,
-        // editable, and never removed by itself — the engine reloads when the set changes, which costs 40-60 s)
-        String synced = LoraSync.ensure(getFilesDir(), prompt.getText().toString());
+        // mod: the <lora:name:weight> tags of the prompt follow the trigger words of the ACTIVATED LoRAs (visible, editable). This never changes
+        // what the engine loads, so it cannot cause a reload; only flipping a switch in the library does that
+        String synced = LoraSync.sync(getFilesDir(), prompt.getText().toString());
         if (!synced.equals(prompt.getText().toString())) { prompt.setText(synced); prompt.setSelection(prompt.getText().length()); }
         final String pr0 = prompt.getText().toString().trim();
         // memory guard: the model needs ~4.5 GB when it is not loaded yet, and a generation ~1.5 GB more; with less the phone swaps, heats up and can hang

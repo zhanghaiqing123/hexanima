@@ -63,6 +63,8 @@ abstract class MainLora extends Base {
     abstract boolean isMoss(); abstract boolean isQwen(); abstract boolean isMage();
     abstract TextView link(String s);
     abstract void loraAdd(String n, String w, String words);
+    /** mod: rewrite the prompt's <lora:…> tags from the library (called after a switch changes) */
+    abstract void loraSync();
     abstract void loraRemove(String n, String words);
     abstract void loraSetWeight(String n, String w);
     abstract String loraWeight(String n);
@@ -88,8 +90,8 @@ abstract class MainLora extends Base {
         LinearLayout th = new LinearLayout(this); th.setGravity(Gravity.CENTER_VERTICAL);
         th.addView(text("LoRAs", 20, TXT, true), new LinearLayout.LayoutParams(0, -2, 1));
         final TextView cnt = text("", 12, ACC, true); th.addView(cnt); v.addView(th);
-        v.addView(text(Tr.s(this, "Activate = its <lora:…> tag and trigger words go into the prompt · Auto = every picture mounts it · long-press a LoRA for trigger words, category and delete",
-                "激活＝把它的 <lora:…> 标签和触发词写进提示词；自动挂载＝每次生成都挂上；长按 LoRA 可编辑触发词、分类、删除"), 11, DIM, false));
+        v.addView(text(Tr.s(this, "On = the model loads this LoRA (switching reloads once) · the tag <lora:…> appears in the prompt when its trigger words are there · Auto = keep the tag even without them · long-press for trigger words, category, delete",
+                "激活＝让模型加载这个 LoRA（只有切换开关才会重载模型）；提示词里出现它的触发词时会自动写上 <lora:…> 标签；自动挂载＝即使没有触发词也保留标签；长按可编辑触发词、分类、删除"), 11, DIM, false));
         final EditText filter = field(L.s("Фильтр: имя или слово…", "Filter: name or word…")); filter.setSingleLine(true); filter.setTextSize(15);
         LinearLayout.LayoutParams fl = new LinearLayout.LayoutParams(-1, -2); fl.topMargin = dp(10); fl.bottomMargin = dp(8); v.addView(filter, fl);
         final HorizontalScrollView catScroll = new HorizontalScrollView(this); catScroll.setHorizontalScrollBarEnabled(false); final LinearLayout catRow = new LinearLayout(this); catScroll.addView(catRow);
@@ -118,14 +120,14 @@ abstract class MainLora extends Base {
             final String title0 = md != null && !md.optString("name").isEmpty() ? md.optString("name") : n, al = alias(true, "anima/" + n);
             String title = al.isEmpty() ? title0 : al;
             final File libf = f;
-            String w0 = loraWeight(n);
-            float wdef = LoraSync.weight(libf);   // mod: the strength written into the tag when it is created for the user
+            final boolean on0 = LoraSync.on(libf);   // mod: the stored switch — the only thing that decides whether the engine loads this file
+            float wdef = LoraSync.weight(libf);      // the strength written into the tag when it is created for the user
             LinearLayout row = new LinearLayout(this); row.setOrientation(LinearLayout.VERTICAL); row.setPadding(dp(4), dp(8), dp(10), dp(8));
-            row.setBackground(bg(w0 != null ? SEL : FIELD, 12));
+            row.setBackground(bg(on0 ? SEL : FIELD, 12));
 
             // mod: line 1 — the switch and the name; line 2 — trigger words, category, file name in a smaller font; line 3 — rename, automatic, strength, delete
             LinearLayout l1 = new LinearLayout(this); l1.setGravity(Gravity.CENTER_VERTICAL);
-            CheckBox cb = new CheckBox(this); cb.setButtonTintList(ColorStateList.valueOf(ACC)); cb.setChecked(w0 != null); cb.setPadding(0, 0, 0, 0);
+            CheckBox cb = new CheckBox(this); cb.setButtonTintList(ColorStateList.valueOf(ACC)); cb.setChecked(on0); cb.setPadding(0, 0, 0, 0);
             l1.addView(cb);
             l1.addView(text(Tr.s(this, "on", "激活"), 10, DIM, false));
             TextView tn = text(title, 15, TXT, true); tn.setSingleLine(true); tn.setEllipsize(android.text.TextUtils.TruncateAt.END);
@@ -156,12 +158,14 @@ abstract class MainLora extends Base {
             l3.addView(del);
             row.addView(l3);
 
-            ac.setOnCheckedChangeListener((b, on) -> LoraSync.setAuto(libf, on));
+            ac.setOnCheckedChangeListener((b, on) -> { LoraSync.setAuto(libf, on); loraSync(); });
             cb.setOnCheckedChangeListener((b, on) -> {
                 String w = we.getText().toString().trim().replace(',', '.'); if (w.isEmpty()) w = "1.00";
                 try { LoraSync.setWeight(libf, Float.parseFloat(w)); } catch (NumberFormatException ignored) { }
-                if (on) { if (loraWeight(n) == null) loraAdd(n, w, words); prefs().edit().putString("anima_lora_sel", n).apply(); } else loraRemove(n, words);
+                LoraSync.setOn(libf, on);   // the switch: the engine reloads once, here
+                prefs().edit().putString("anima_lora_sel", n).apply();
                 row.setBackground(bg(on ? SEL : FIELD, 12)); count.run();
+                loraSync();   // its tag appears or disappears in the prompt (this does not reload anything)
             });
             we.addTextChangedListener(watch(s -> { String w = s.trim().replace(',', '.'); try { float nv = Float.parseFloat(w); LoraSync.setWeight(libf, nv); if (cb.isChecked()) loraSetWeight(n, String.format(java.util.Locale.US, "%.2f", nv)); } catch (NumberFormatException ignored) { } }));
             tn.setOnClickListener(x -> cb.toggle());   // the name still mounts it; the buttons on the row keep their own taps
@@ -428,6 +432,8 @@ abstract class MainLora extends Base {
         } catch (Exception ignored) { }
     }
     void gptApply() {
+        File gf = new File(AnimaLora.dir(getFilesDir()), GPT_LORA + ".safetensors");
+        if (gf.isFile()) { LoraSync.setOn(gf, true); LoraSync.setWeight(gf, 0.8f); }   // mod: switched on, otherwise the engine would not load it
         List<String> cur = new ArrayList<>(); cur.add(GPT_TRIGGER); for (String t : tokens(prompt.getText().toString())) if (!t.equalsIgnoreCase(GPT_TRIGGER)) cur.add(t);
         cur.add("<lora:" + GPT_LORA + ":0.8>");
         prompt.setText(android.text.TextUtils.join(", ", cur)); prompt.setSelection(prompt.getText().length());

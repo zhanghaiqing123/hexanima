@@ -10,16 +10,20 @@ import java.util.regex.Pattern;
 import org.json.JSONObject;
 
 /**
- * mod: prompt-side LoRA activation for the Anima models.
+ * mod: the Anima LoRA library, i.e. which files the engine loads and which {@code <lora:…>} tags the prompt carries.
  *
- * <p>A library file is {@code files/anima/lora/<name>.safetensors} with a card next to it ({@code <name>.json}: name, words, tags, cat and the two keys
- * this class adds: {@code "auto"}, mount for every picture, and {@code "w"}, the strength written into the tag). The prompt calls a LoRA with
- * {@code <lora:name:weight>}; {@link AnimaLora#tags} turns those into the LORA= list of the engine and strips them from the text, so a tag costs no tokens.
+ * <p>A library file is {@code files/anima/lora/<name>.safetensors} with a card next to it ({@code <name>.json}: name, words, tags, cat and the three
+ * keys this class adds: {@code "on"}, the switch that decides whether the engine loads the file; {@code "auto"}, always put its tag in the prompt;
+ * {@code "w"}, the strength of that file).
  *
- * <p>{@link #ensure} runs right before a picture (Main.generate and MainRun.runOne, so the UI, batches and the local API all go through it):
- * it appends {@code <lora:name:w>} for every library LoRA that is marked automatic or whose trigger words are in the prompt.
- * It never removes a tag on its own: the engine reloads when the LoRA set changes (40-60 s), so a prompt without the trigger words must not
- * unload what the previous picture just folded in.
+ * <p>The two things are deliberately separate, because anima.sh reloads the model whenever the LORA list changes (40-60 s):
+ * <ul>
+ *   <li>{@link #env} — what the engine loads: the ACTIVATED files only. A prompt edit never changes this, so typing, clearing or rewriting a
+ *       prompt cannot trigger a reload; flipping a switch in the library does, once.</li>
+ *   <li>{@link #sync} — the {@code <lora:name:weight>} tags of the prompt: a marker of which activated LoRAs this prompt uses. A file with trigger
+ *       words gets its tag when one of them is in the prompt and loses it when they are gone; {@code auto} keeps it there always. The tags are
+ *       stripped from the text before it is encoded ({@link AnimaLora#tags}), so they cost no tokens and do not change the loaded set.</li>
+ * </ul>
  */
 final class LoraSync {
     /** <lora:name> and <lora:name:weight>, the same shape AnimaLora.tags() parses */
@@ -50,7 +54,25 @@ final class LoraSync {
         }
     }
 
-    /** mount this LoRA for every picture, whether or not the prompt mentions its trigger words */
+    /** the switch: the engine loads this file (and only changing this reloads the model) */
+    static boolean on(File lora) {
+        try {
+            return card(lora).optBoolean("on", false);
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    static void setOn(File lora, boolean v) {
+        try {
+            JSONObject j = card(lora);
+            j.put("on", v);
+            saveCard(lora, j);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /** always put this file's tag in the prompt, whether or not the prompt mentions its trigger words (needs the switch too) */
     static boolean auto(File lora) {
         try {
             return card(lora).optBoolean("auto", false);
@@ -68,7 +90,7 @@ final class LoraSync {
         }
     }
 
-    /** the strength written into the tag for this LoRA (1 unless the user set one) */
+    /** the strength of this file (1 unless the user set one) */
     static float weight(File lora) {
         try {
             double w = card(lora).optDouble("w", 1.0);
@@ -90,6 +112,11 @@ final class LoraSync {
 
     static String name(File lora) { return lora.getName().replaceAll("(?i)\\.safetensors$", ""); }
 
+    static String fmt(float w) { return String.format(Locale.US, "%.2f", w); }
+
+    /** the tag of one file, with its stored strength */
+    static String tagOf(File lora) { return "<lora:" + name(lora) + ":" + fmt(weight(lora)) + ">"; }
+
     /** every LoRA in the library, sorted by name, temporary files skipped */
     static List<File> library(File home) {
         List<File> out = new ArrayList<>();
@@ -107,6 +134,14 @@ final class LoraSync {
     static File find(File home, String name) {
         if (name == null || name.trim().isEmpty()) return null;
         return AnimaLora.find(home, name);
+    }
+
+    // ---------------------------------------------------------------- what the engine loads
+    /** "path*weight" for every activated file, in library order — the LORA= list of the engine (stable: the prompt is not part of it) */
+    static List<String> env(File home) {
+        List<String> out = new ArrayList<>();
+        for (File f : library(home)) if (on(f)) out.add(f.getPath() + "*" + fmt(weight(f)));
+        return out;
     }
 
     // ---------------------------------------------------------------- trigger words
@@ -143,7 +178,7 @@ final class LoraSync {
         return false;
     }
 
-    /** true when the prompt has a tag for this LoRA — a <lora:name:0> counts too: a weight of 0 is how the user switches one off by hand */
+    /** true when the prompt has a tag for this LoRA — a <lora:name:0> counts too, it is still a tag the user sees */
     static boolean called(String prompt, String name) {
         if (prompt == null) return false;
         Matcher m = TAG.matcher(prompt);
@@ -152,66 +187,98 @@ final class LoraSync {
         return false;
     }
 
-    // ---------------------------------------------------------------- the hook
-    /**
-     * The prompt with the tags of every LoRA that should be mounted but is not called yet. Only additions: the text the user typed is never
-     * changed, and a tag that is already there keeps its own strength.
-     */
-    static String ensure(File home, String prompt) {
-        String p = prompt == null ? "" : prompt;
-        List<File> lib = library(home);
-        StringBuilder add = new StringBuilder();
-        for (File f : lib) {
-            String n = name(f);
-            if (called(p, n)) continue;
-            boolean on = auto(f) || triggered(f, p);
-            if (!on) continue;
-            if (add.length() > 0) add.append(", ");
-            add.append("<lora:").append(n).append(':').append(String.format(Locale.US, "%.2f", weight(f))).append('>');
-        }
-        if (add.length() == 0) return prompt == null ? "" : prompt;
-        String head = p.trim();
-        if (head.isEmpty()) return add.toString();
-        char last = head.charAt(head.length() - 1);
-        return head + (last == ',' ? " " : ", ") + add;
+    /** the pattern of one LoRA's tag: <lora:name> or <lora:name:anything> */
+    static Pattern tagPattern(String name) {
+        return Pattern.compile("<lora:" + Pattern.quote(name) + "(?::[^>]*)?>", Pattern.CASE_INSENSITIVE);
     }
 
-    /** what {@link #ensure} would add right now, as "name 1.00 · name2 0.80"; empty when nothing would be added */
-    static String summary(File home, String prompt) {
+    // ---------------------------------------------------------------- the hook
+    /**
+     * The prompt with its {@code <lora:…>} tags brought in line with the library. Never touches what the engine loads.
+     * <ul>
+     *   <li>not activated → its tag is taken out (an unactivated LoRA must not appear);</li>
+     *   <li>activated with trigger words → tag when one of them is in the prompt, no tag when they are gone;</li>
+     *   <li>activated with {@code auto} → tag always;</li>
+     *   <li>activated without trigger words → whatever the prompt has is kept, nothing is added unless {@code auto};</li>
+     *   <li>the pose adapter is left alone (the POSE section owns its tag).</li>
+     * </ul>
+     * A tag that is there keeps its place; a missing one is appended; a wrong strength is corrected to the card's.
+     */
+    static String sync(File home, String prompt) {
+        String p = prompt == null ? "" : prompt;
+        StringBuilder add = new StringBuilder();
+        String out = p;
+        boolean changed = false;
+        for (File f : library(home)) {
+            String n = name(f);
+            if (n.equalsIgnoreCase(Pose.LORA)) continue;   // the pose adapter's tag belongs to the POSE section
+            boolean has = called(out, n), act = on(f), auto = auto(f), hasW = !Civitai.words(f).isEmpty();
+            boolean want;
+            if (!act) want = false;
+            else if (hasW) want = auto || triggered(f, out);
+            else want = auto || has;
+            if (!want) {
+                if (has) { out = tagPattern(n).matcher(out).replaceAll(""); changed = true; }
+                continue;
+            }
+            if (!has) {
+                if (add.length() > 0) add.append(", ");
+                add.append(tagOf(f));
+                continue;
+            }
+            // present: only the strength may need correcting
+            String want2 = tagOf(f);
+            Matcher m = tagPattern(n).matcher(out);
+            if (m.find() && !m.group().equalsIgnoreCase(want2)) {
+                out = out.substring(0, m.start()) + want2 + out.substring(m.end());
+                changed = true;
+            }
+        }
+        if (add.length() > 0) {
+            String head = out.trim();
+            out = head.isEmpty() ? add.toString() : head + (head.endsWith(",") ? " " : ", ") + add;
+            changed = true;
+        }
+        if (!changed) return p;
+        out = out.replaceAll("[ \\t]*,[ \\t]*(,[ \\t]*)+", ", ").trim();
+        while (out.endsWith(",")) out = out.substring(0, out.length() - 1).trim();
+        return out;
+    }
+
+    /** "name 1.00 · …" of the activated files whose tag the prompt does not have yet (what sync will append) */
+    static String pending(File home, String prompt) {
         String p = prompt == null ? "" : prompt;
         StringBuilder sb = new StringBuilder();
         for (File f : library(home)) {
-            String n = name(f);
-            if (called(p, n)) continue;
-            if (!(auto(f) || triggered(f, p))) continue;
+            if (!on(f) || called(p, name(f))) continue;
+            boolean want = auto(f) || triggered(f, p);
+            if (!want) continue;
             if (sb.length() > 0) sb.append(" · ");
-            sb.append(n).append(' ').append(String.format(Locale.US, "%.2f", weight(f)));
+            sb.append(name(f)).append(' ').append(fmt(weight(f)));
         }
         return sb.toString();
     }
 
-    /** the LoRAs the prompt calls right now, as "name 1.00 · …" (a tag with 0 or an unknown name is left out) */
-    static String mounted(File home, String prompt) {
+    /** "name 1.00 · …" of the activated files the prompt has a tag for */
+    static String inPrompt(File home, String prompt) {
+        String p = prompt == null ? "" : prompt;
         StringBuilder sb = new StringBuilder();
-        if (prompt == null) return "";
-        Matcher m = TAG.matcher(prompt);
-        while (m.find()) {
-            String n = m.group(1).trim();
-            if (AnimaLora.find(home, n) == null) continue;
-            String w = m.group(2) == null || m.group(2).trim().isEmpty() ? "1.0" : m.group(2).trim();
-            try {
-                if (Float.parseFloat(w) == 0f) continue;
-            } catch (NumberFormatException ignored) {
-                continue;
-            }
+        for (File f : library(home)) {
+            if (!on(f) || !called(p, name(f))) continue;
             if (sb.length() > 0) sb.append(" · ");
-            sb.append(n).append(' ').append(w);
+            sb.append(name(f)).append(' ').append(fmt(weight(f)));
         }
         return sb.toString();
     }
 
-    /** the tag of one LoRA, with its stored strength */
-    static String tagOf(File lora) {
-        return "<lora:" + name(lora) + ":" + String.format(Locale.US, "%.2f", weight(lora)) + ">";
+    /** "name 1.00 · …" of the activated files — what the engine loads right now */
+    static String loaded(File home) {
+        StringBuilder sb = new StringBuilder();
+        for (File f : library(home)) {
+            if (!on(f)) continue;
+            if (sb.length() > 0) sb.append(" · ");
+            sb.append(name(f)).append(' ').append(fmt(weight(f)));
+        }
+        return sb.toString();
     }
 }
