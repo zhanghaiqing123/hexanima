@@ -5,10 +5,28 @@
 
 | 版本 | 服务版本 | APK | sha256（完整） |
 |---|---|---|---|
+| v6 | `1.9.5-v73+api6` | `HexAnima-1.9.5-v73-localapi-v6.apk` | `fbec8c8f2a63c9e9fb4f5dba4b4ef4b6b5798096b91f0c1108333677fd0f5d38` |
 | v5 | `1.9.5-v73+api5` | `HexAnima-1.9.5-v73-localapi-v5.apk` | `892c8e35af9b44fc2f82ed9b7ad2d01008a3d8365a11e4d7002f149d8a1402f4` |
 | v4 | `1.9.5-v73+api4` | `HexAnima-1.9.5-v73-localapi-v4.apk` | `7626cb8ba45d8e4601e3987ea17eee11f9a5f46e9f1a99036c0ce7fb8c84f907` |
 | v3 | `1.9.5-v73+api3d` | `HexAnima-1.9.5-v73-localapi-v3.apk` | `d1ead0a46cbafda39a25930b4bccdebf237d15559898f9ce34a111de04063297` |
 | v2 | `1.9.5-v73+api3` | `HexAnima-1.9.5-v73-localapi-v2.apk` | `56304bb73c9959c65af37c59e512e818dfc84edc074f7b1bce3dc567fc91c3d7` |
+
+---
+
+## v6 — 2026-11-19
+
+修复 v5 转换时“无法读取文件 / 秒失败”。
+
+* **原因**：v5 的 `run()` 把转换器的原始错误（`error cannot read …`）直接翻成了本地化文案，
+  而调用方是靠 `err.contains("cannot read")` 决定要不要「复制一份再转换」的——翻译之后这个判断永远不成立，兜底失效。
+  另外 Android 的 `ProcessBuilder` 不继承父进程 fd，`/proc/<pid>/fd/<n>` 这条老路子本身就不可靠。
+* **现在按三级顺序取源文件**：
+  ① 解析 SAF 文档的真实路径（`primary:` 卷与 SD 卡卷）并 `canRead()` + 长度校验，直接交给转换器（零复制）；
+  ② 退一步用 `/proc/<pid>/fd/<n>`；
+  ③ 都不行就把源文件复制进应用内（`files/anima/import/`）再转换，带 GB 级进度，开始前先算好「复制 + 模型」所需空间。
+* 转换器报错只在最后翻译一次，不再参与控制流。
+
+安装：与 v2–v5 同签名，可覆盖安装。
 
 ---
 

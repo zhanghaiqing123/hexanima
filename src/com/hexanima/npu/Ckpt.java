@@ -283,25 +283,38 @@ final class Ckpt {
         if (pfd == null) { Models.deleteTree(dir); return S(a, "cannot open the file", "打不开这个文件"); }
         File tmp = null;
         try {
-            String src = "/proc/" + android.os.Process.myPid() + "/fd/" + pfd.getFd();
-            String err = run(a, bin, src, dir.getPath(), it.blocks);
-            if (err != null && err.contains("cannot read")) {   // the provider does not expose a real file: copy (needs the space twice)
+            // the converter is a separate process: a SAF file has no path it can open, so try, in order,
+            // (1) the real path of the document, (2) the inherited descriptor, (3) a copy inside the app
+            String err = null;
+            String real = realPath(it.uri);
+            String src = null;
+            if (real != null) {
+                File f = new File(real);
+                if (f.isFile() && f.canRead() && f.length() == it.size) src = real;
+            }
+            if (src != null) err = run(a, bin, src, dir.getPath(), it.blocks);
+            if (src == null || (err != null && err.startsWith("cannot read"))) {
+                String fdSrc = "/proc/" + android.os.Process.myPid() + "/fd/" + pfd.getFd();
+                if (src == null) err = run(a, bin, fdSrc, dir.getPath(), it.blocks);
+            }
+            if (err != null && err.startsWith("cannot read")) {   // no path the converter can open: convert a copy
                 long needCopy = it.size + need + 50000000L;
                 if (home.getUsableSpace() < needCopy) {
                     Models.deleteTree(dir);
-                    return F(a, "Not enough space for a copy too: %s GB", "复制一份所需的空间也不够：%s GB", Backup.gb(needCopy));
+                    return F(a, "Not enough space for a copy: %s GB (the source is %s GB, the model %s GB)",
+                        "空间不足：需要 %s GB 来复制一份（源文件 %s GB + 模型 %s GB）",
+                        Backup.gb(needCopy), Backup.gb(it.size), Backup.gb(need));
                 }
                 tmp = new File(Backup.importTemp(home));
                 tmp.getParentFile().mkdirs();
-                Backup.pset(S(a, "Copying the file\u2026", "正在复制文件\u2026") + "  " + it.name, 0);
-                InputStream in = cr.openInputStream(it.uri);
-                OutputStream o = new FileOutputStream(tmp);
-                try { copy(in, o); } finally { try { o.close(); } catch (Throwable ignored) { } try { in.close(); } catch (Throwable ignored) { } }
+                Backup.pset(F(a, "The folder provider gives no path: copying %s GB into the app\u2026",
+                    "该系统目录不提供文件路径：正在复制 %s GB 到应用内\u2026", Backup.gb(it.size)), 0);
+                copyWithProgress(a, cr, it, tmp);
                 Models.deleteTree(dir);
                 dir.mkdirs();
                 err = run(a, bin, tmp.getPath(), dir.getPath(), it.blocks);
             }
-            if (err != null) { Models.deleteTree(dir); return err; }
+            if (err != null) { Models.deleteTree(dir); return converterError(a, err); }
             // the safetensors header of the checkpoint: kept as hdr.bin (like catalog models) and used to build the
             // sparse sd.cpp stub of the real size, so no catalog download is needed
             File hdr = new File(dir, "hdr.bin");
@@ -345,7 +358,7 @@ final class Ckpt {
             }
         } finally { try { r.close(); } catch (Throwable ignored) { } }
         p.waitFor();
-        if (err != null) return converterError(a, err);
+        if (err != null) return err;
         if (p.exitValue() != 0) return F(a, "converter exit %d", "转换器退出码 %d（可能内存或空间不足）", p.exitValue());
         if (seen != blocks) return F(a, "converter wrote %d blocks, expected %d", "转换器写出 %d 块，与预期的 %d 块不一致", seen, blocks);
         return null;
@@ -361,6 +374,49 @@ final class Ckpt {
         if (err.startsWith("missing")) return F(a, "the file is incomplete: %s", "文件不完整：%s", err.replaceFirst("^missing ", ""));
         if (err.startsWith("dtype of")) return F(a, "unsupported tensor type: %s", "不支持的张量类型：%s", err.replaceFirst("^dtype of ", ""));
         return err;
+    }
+
+    /** the real file behind a SAF document, when the storage provider is the primary external volume */
+    static String realPath(Uri uri) {
+        try {
+            if (!"com.android.externalstorage.documents".equals(uri.getAuthority())) return null;
+            String doc = android.provider.DocumentsContract.getDocumentId(uri);
+            if (doc == null) return null;
+            if (doc.startsWith("primary:")) doc = doc.substring("primary:".length());
+            else {
+                int c = doc.indexOf(':');
+                if (c <= 0) return null;
+                String vol = doc.substring(0, c);
+                doc = doc.substring(c + 1);
+                if (vol.length() != 9 || !vol.contains("-")) return null;   // a removable card: /storage/XXXX-XXXX
+                return "/storage/" + vol + "/" + doc;
+            }
+            return android.os.Environment.getExternalStorageDirectory().getAbsolutePath() + "/" + doc;
+        } catch (Throwable t) { return null; }
+    }
+
+    /** the source has no path the converter can open: copy it, showing the bytes as they go */
+    static void copyWithProgress(Activity a, ContentResolver cr, Item it, File out) throws Exception {
+        InputStream in = cr.openInputStream(it.uri);
+        OutputStream o = new FileOutputStream(out);
+        long done = 0, last = 0;
+        try {
+            byte[] b = new byte[1 << 20];
+            int n;
+            while ((n = in.read(b)) > 0) {
+                o.write(b, 0, n);
+                done += n;
+                long now = System.currentTimeMillis();
+                if (now - last > 400) {
+                    last = now;
+                    Backup.pset(F(a, "Copying %1$s / %2$s GB", "正在复制 %1$s / %2$s GB",
+                        Backup.gb(done), Backup.gb(it.size)), Backup.permille(done, it.size));
+                }
+            }
+        } finally {
+            try { o.close(); } catch (Throwable ignored) { }
+            try { in.close(); } catch (Throwable ignored) { }
+        }
     }
 
     /** the first headerLen bytes of the checkpoint: the 8-byte length + the JSON header, nothing else */
