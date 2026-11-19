@@ -182,6 +182,7 @@ abstract class MainRun extends MainLora {
         if (isMoss()) return runOneMoss(pr, seedS, w, h, t0);
         final String fullPrompt = pr;   // kept with its <lora:...> tags in the PNG
         if (Pose.active(this)) setProgressUi(0, L.s("Preparando la pose…", "Preparing the pose…"), t0);
+        pr = LoraSync.ensure(getFilesDir(), pr);   // mod: automatic and trigger-word LoRAs join the prompt here (also for the 8081 API and the headless path)
         pr = Pose.apply(this, pr, w, h);   // pose control: writes the control latent for this size and adds the adapter's LoRA
         AnimaLora.Tags tg = AnimaLora.tags(getFilesDir(), pr);
         pr = tg.prompt; tagLoras = tg.items;

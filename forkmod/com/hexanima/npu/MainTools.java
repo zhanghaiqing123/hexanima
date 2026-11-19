@@ -569,7 +569,8 @@ abstract class MainTools extends MainRun {
     float batteryC() { Intent b = registerReceiver(null, new IntentFilter(Intent.ACTION_BATTERY_CHANGED)); return b == null ? 0 : b.getIntExtra("temperature", 0) / 10f; }
     /** plugged in: charging warms the battery by itself (~42 °C at rest over USB), so the battery limits are 3 °C higher */
     boolean charging() { Intent b = registerReceiver(null, new IntentFilter(Intent.ACTION_BATTERY_CHANGED)); return b != null && b.getIntExtra("plugged", 0) != 0; }
-    float hotC() { return charging() ? 45f : 42f; }
+    /** mod: the threshold from Settings (35-55 °C, default 45); charging adds 3 °C, the charger itself warms the battery */
+    float hotC() { return charging() ? Settings.tempLimit(this) + 3f : Settings.tempLimit(this); }
     boolean tooHot() {
         PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
         if (pm.getCurrentThermalStatus() >= PowerManager.THERMAL_STATUS_SEVERE) return true;
@@ -594,7 +595,7 @@ abstract class MainTools extends MainRun {
     boolean waitCool(long t0) {
         long since = System.currentTimeMillis(); notifyCooling(batteryC());
         while (!cancelled) {
-            float c = batteryC(); if (c < hotC() - 3f && !tooHot()) { try { ((NotificationManager) getSystemService(NOTIFICATION_SERVICE)).cancel(3); } catch (Exception ignored) { } return true; }
+            float c = batteryC(); if (c < hotC() - 2f && !tooHot()) { try { ((NotificationManager) getSystemService(NOTIFICATION_SERVICE)).cancel(3); } catch (Exception ignored) { } return true; }
             long mins = (System.currentTimeMillis() - since) / 60000;
             final String m = L.f("Охлаждение телефона… %.1f °C", "Letting the phone cool down… %.1f °C", c);
             ui.post(() -> status.setText(m + "  ·  " + L.f("пауза %d мин", "paused %d min", mins)));
@@ -608,7 +609,7 @@ abstract class MainTools extends MainRun {
         if (mode.equals("on")) on = true;
         else if (mode.equals("off")) on = false;
         else {
-            float c = batteryC(), lim = charging() ? 43f : 40f, hr = Float.NaN;
+            float c = batteryC(), lim = hotC() - 5f, hr = Float.NaN;   // mod: the low clock kicks in 5 °C under the pause threshold
             if (android.os.Build.VERSION.SDK_INT >= 30) hr = ((PowerManager) getSystemService(POWER_SERVICE)).getThermalHeadroom(0);
             boolean hot = c >= lim || (!Float.isNaN(hr) && hr >= 0.75f), cold = c < lim - 2f && (Float.isNaN(hr) || hr < 0.65f);
             on = coolOn ? !cold : hot;

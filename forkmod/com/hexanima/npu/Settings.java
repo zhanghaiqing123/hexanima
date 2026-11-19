@@ -22,6 +22,11 @@ public class Settings extends Base {
     /** low-memory mode for the Anima models (blocks are streamed from storage instead of being pinned in RAM): on by default below ~9.5 GB of RAM */
     /** cool mode: the NPU runs at a lower clock / voltage: much less heat, ~17 % slower. "auto" (default): only while the phone is warm, "on": always, "off": never */
     static String coolMode(Context c) { SharedPreferences p = prefs(c); return p.getString("cool_mode", p.contains("cool") && !p.getBoolean("cool", true) ? "off" : "auto"); }
+    /* mod: the battery temperature at which a batch pauses, and whether a single picture is allowed to start anyway. Charging warms the battery by
+       itself (about 42 °C at rest over USB), so the limit is 3 °C higher while plugged in. */
+    static final int TEMP_MIN = 35, TEMP_MAX = 55;
+    static int tempLimit(Context c) { return Math.max(TEMP_MIN, Math.min(TEMP_MAX, prefs(c).getInt("temp_limit", 45))); }
+    static boolean tempFirstFree(Context c) { return prefs(c).getBoolean("temp_first_free", true); }
     static boolean lowRam(Context c) { return prefs(c).getBoolean("lowram", Compat.ramGb(c) < 9.5); }
     static boolean keepOn(Context c) { return prefs(c).getBoolean("keepon", true); }
     static boolean keepMeta(Context c) { return prefs(c).getBoolean("keep_meta", true); }
@@ -191,6 +196,26 @@ public class Settings extends Base {
         TextView coolNote = text(L.s("NPU работает на меньшей частоте: телефон греется намного меньше, картинка ~17 % дольше. «Автоматически»: полная скорость, пока телефон холодный, и меньшая частота, когда он нагревается.",
                 "The NPU runs at a lower clock: the phone gets much less hot, a picture takes ~17 % longer. Automatic: full speed while the phone is cool, the lower clock once it gets warm."), 12, DIM, false);
         coolNote.setPadding(dp(2), 0, 0, dp(4)); c3.addView(coolNote);
+        // mod: the pause threshold, the one the user can feel (35-55 °C)
+        LinearLayout tr2 = new LinearLayout(this); tr2.setOrientation(LinearLayout.VERTICAL); tr2.setPadding(dp(2), dp(10), dp(2), dp(6));
+        LinearLayout th2 = new LinearLayout(this); th2.setGravity(Gravity.CENTER_VERTICAL);
+        th2.addView(text(Tr.s(this, "Pause above", "多少度就暂停生图"), 15, TXT, true), new LinearLayout.LayoutParams(0, -2, 1));
+        final TextView tv2 = text(tempLimit(this) + " \u00b0C", 14, ACC, true); th2.addView(tv2); tr2.addView(th2);
+        SeekBar sb2 = new SeekBar(this); sb2.setMax(TEMP_MAX - TEMP_MIN); sb2.setProgress(tempLimit(this) - TEMP_MIN);
+        sb2.setProgressTintList(ColorStateList.valueOf(ACC)); sb2.setThumbTintList(ColorStateList.valueOf(ACC));
+        sb2.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            public void onProgressChanged(SeekBar b, int v, boolean u) { tv2.setText((TEMP_MIN + v) + " \u00b0C"); }
+            public void onStartTrackingTouch(SeekBar b) { }
+            public void onStopTrackingTouch(SeekBar b) { p.edit().putInt("temp_limit", TEMP_MIN + b.getProgress()).apply(); }
+        });
+        tr2.addView(sb2, new LinearLayout.LayoutParams(-1, dp(36)));
+        TextView tn2 = text(Tr.s(this, "Battery temperature. A batch pauses between pictures above it; the default is 45 \u00b0C (48 \u00b0C while charging). A higher value means a hotter phone, and the system may slow it down on its own.",
+                "电池温度。批量生成会在两张之间暂停于此温度以上；默认 45 \u00b0C（充电时 48 \u00b0C）。调高会更热，系统也可能自己降频。"), 12, DIM, false);
+        tn2.setPadding(0, dp(2), 0, 0); tr2.addView(tn2);
+        c3.addView(tr2);
+        c3.addView(toggle(Tr.s(this, "Let one picture start even when hot", "太热时也允许先出一张"),
+                Tr.s(this, "A batch still pauses between pictures, but a single picture is not blocked (the phone itself may still slow down).",
+                        "批量生成仍会在两张之间暂停；但单张不会被直接拦住（手机系统仍可能自己降频）。"), tempFirstFree(this), on -> p.edit().putBoolean("temp_first_free", on).apply()));
         c3.addView(toggle(L.s("Экономия памяти (медленнее)", "Low-memory mode (slower)"), L.s("Веса модели читаются с накопителя при каждой картинке, а не держатся в ОЗУ. Нужно телефонам с 8 ГБ ОЗУ, на 12 ГБ не нужно.", "The model's weights are read from storage for every picture instead of staying in RAM. Needed on phones with 8 GB of RAM, not on 12 GB."), lowRam(this), on -> p.edit().putBoolean("lowram", on).apply()));   // MOSS-Image takes plain sentences: the quality-tag prefix is for the Anima models only, so the setting is hidden while MOSS is selected
 
         LinearLayout cc = card(col);

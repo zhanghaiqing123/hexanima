@@ -57,6 +57,8 @@ public class Main extends MainEdit {
     LinearLayout customRow, imgBox;
     Button loadBtn, genBtn, countBtn;
     LinearLayout loraBox; TextView loraName, loraInfo; EditText strText; SeekBar strBar; Button loraPick, loraDrop; Button gptStyleBtn;
+    TextView loraAuto, strLabel;   // mod: the LoRAs the next picture adds by itself, and which LoRA the strength slider edits
+    final Runnable loraTick = () -> { if (loraName != null) refreshLora(); };   // debounced: the summary follows the prompt without reading the library on every key
     LinearLayout sampBox, negBox, mossStepsBox; EditText negEdit, stepsEdit, cfgEdit; Button samplerBtn, schedBtn, cutBtn, mossStepsBtn; TextView sampNote;
     LinearLayout pageBar, imgTools;   // ‹ 2 / 3 › over a batch picture (swiping needs a quick fling; the buttons always work)
     TextView pageTag;   // "2 / 3" over a batch picture: the caption under a tall picture is off screen
@@ -334,7 +336,7 @@ public class Main extends MainEdit {
         tokText = text("", 12, DIM, false); tokText.setGravity(Gravity.END); tokText.setPadding(0, 0, dp(6), 0);
         tb.addView(tokText, new LinearLayout.LayoutParams(0, -2, 1));
         root.addView(tb, new LinearLayout.LayoutParams(-1, -2));
-        prompt.addTextChangedListener(watch(s -> countTokens()));
+        prompt.addTextChangedListener(watch(s -> { countTokens(); ui.removeCallbacks(loraTick); ui.postDelayed(loraTick, 600); }));
         countTokens();
 
         // sampling, right under the prompt (Anima models; stored in the same prefs as before): negative prompt, steps, CFG, clip skip, sampler, scheduler
@@ -454,19 +456,22 @@ public class Main extends MainEdit {
         seed.addTextChangedListener(watch(x -> updImgSum()));
 
         // MOSS-Image: user LoRA (picked file is checked at once; strength slider; folded with the turbo adapter on first use)
+        migrateLoraSlot();   // mod: the single selected file of older versions becomes an automatic entry on its card
         loraBox = new LinearLayout(this); loraBox.setOrientation(LinearLayout.VERTICAL);
         loraFold = fold(loraBox, "LORA", "lora");
         LinearLayout lr = new LinearLayout(this); lr.setGravity(Gravity.CENTER_VERTICAL);
-        loraName = text(L.s("не выбрана", "none"), 14, TXT, false); loraName.setSingleLine(true); loraName.setEllipsize(android.text.TextUtils.TruncateAt.MIDDLE);
-        loraName.setBackground(bg(CARD, 16)); loraName.setPadding(dp(16), dp(12), dp(16), dp(12));
+        loraName = text(L.s("не выбрана", "none"), 14, TXT, false); loraName.setSingleLine(true); loraName.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        loraName.setBackground(bg(CARD, 16)); loraName.setPadding(dp(16), dp(12), dp(12), dp(12));
+        loraName.setOnClickListener(v -> loraPicker());   // mod: a drop-down over the library instead of a hidden "last imported" file
         lr.addView(loraName, new LinearLayout.LayoutParams(0, -2, 1));
         loraPick = button(L.s("Importar", "Import"), CARD, ACC); loraPick.setTextSize(13); loraPick.setAllCaps(false); loraPick.setOnClickListener(v -> pickLora());
-        loraDrop = button("✕", CARD, TXT); loraDrop.setOnClickListener(v -> dropLora());
+        loraDrop = button("✕", CARD, TXT); loraDrop.setOnClickListener(v -> dropLoraAsk());   // mod: asks before anything is unmounted or deleted
         LinearLayout.LayoutParams dl2 = new LinearLayout.LayoutParams(dp(48), dp(44)); dl2.leftMargin = dp(8); lr.addView(loraDrop, dl2);
         loraFold.body.addView(lr);
         loraInfo = text("", 12, DIM, false); loraInfo.setPadding(dp(4), dp(6), dp(4), 0); loraFold.body.addView(loraInfo);
+        loraAuto = text("", 12, ACC, false); loraAuto.setPadding(dp(4), dp(2), dp(4), 0); loraFold.body.addView(loraAuto);
         LinearLayout sr2 = new LinearLayout(this); sr2.setGravity(Gravity.CENTER_VERTICAL); sr2.setPadding(0, dp(6), 0, 0);
-        sr2.addView(text(L.s("Сила", "Strength"), 14, TXT, false));
+        strLabel = text(L.s("Сила", "Strength"), 14, TXT, false); sr2.addView(strLabel);
         strBar = new SeekBar(this); strBar.setMax(100); strBar.setProgress(Math.round(prefs().getFloat(lp() + "lora_str", 1f) * 20));
         sr2.addView(strBar, new LinearLayout.LayoutParams(0, -2, 1));
         strText = field("1.00"); strText.setTextSize(14); strText.setMinWidth(dp(64)); strText.setGravity(Gravity.CENTER); strText.setBackground(bg(CARD, 12));
@@ -475,7 +480,7 @@ public class Main extends MainEdit {
         strText.setOnFocusChangeListener((v, f) -> { if (!f) applyStrText(); });
         LinearLayout.LayoutParams stl = new LinearLayout.LayoutParams(-2, -2); stl.leftMargin = dp(8); sr2.addView(strText, stl);
         strBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
-            public void onProgressChanged(SeekBar b, int p, boolean u) { if (u) { strText.setText(String.format(java.util.Locale.US, "%.2f", p * 0.05f)); prefs().edit().putFloat(lp() + "lora_str", p * 0.05f).apply(); } }
+            public void onProgressChanged(SeekBar b, int p, boolean u) { if (u) { strText.setText(String.format(java.util.Locale.US, "%.2f", p * 0.05f)); setLoraStr(p * 0.05f); } }
             public void onStartTrackingTouch(SeekBar b) { }
             public void onStopTrackingTouch(SeekBar b) { }
         });
@@ -797,7 +802,38 @@ public class Main extends MainEdit {
             return "✓ " + c.message() + "\n" + L.f("В промпте: <lora:%s:1.0>", "In the prompt: <lora:%s:1.0>", tag);
         } catch (Exception e) { return saved; }
     }
+    /** mod: which library LoRA the strength slider of the Anima card edits (the one last mounted from the drop-down) */
+    String loraSel() { return prefs().getString("anima_lora_sel", ""); }
+    File loraSelFile() { String n = loraSel(); return n.isEmpty() ? null : LoraSync.find(getFilesDir(), n); }
+
     void refreshLora() {
+        if (loraName == null) return;
+        if (!isMoss()) {   // mod: Anima — the card shows what the prompt calls right now, not one hidden "selected" file
+            String p = prompt == null ? "" : prompt.getText().toString();
+            String mounted = LoraSync.mounted(getFilesDir(), p), auto = LoraSync.summary(getFilesDir(), p);
+            boolean any = !mounted.isEmpty();
+            loraName.setText(any ? mounted : L.s("не выбрана", "none"));
+            loraName.setTextColor(any ? TXT : DIM);
+            loraInfo.setText(any ? Tr.f(this, "Called by the prompt: %s", "提示词已调用：%s", mounted)
+                    : Tr.s(this, "Tap the name: mount or unmount a LoRA of the library. Long-press a LoRA in the library for its trigger words.",
+                              "点名字可从库里挂载/取消挂载 LoRA。触发词、分类、删除在库界面长按该 LoRA。"));
+            loraInfo.setTextColor(any ? OK : DIM);
+            if (loraAuto != null) {
+                loraAuto.setText(auto.isEmpty() ? "" : Tr.f(this, "Will be added to this picture: %s", "本次生成会自动补上：%s", auto));
+                loraAuto.setVisibility(auto.isEmpty() ? View.GONE : View.VISIBLE);
+            }
+            loraFold.sum.setText(any ? mounted : L.s("нет", "none"));
+            loraFold.sum.setTextColor(any ? ACC : DIM);
+            loraDrop.setVisibility(any || !LoraSync.library(getFilesDir()).isEmpty() ? View.VISIBLE : View.GONE);
+            File sel = loraSelFile();
+            boolean hasSel = sel != null;
+            if (strLabel != null) strLabel.setText(hasSel ? Tr.f(this, "Strength · %s", "强度 · %s", LoraSync.name(sel)) : L.s("Сила", "Strength"));
+            strBar.setEnabled(hasSel); strBar.setAlpha(hasSel ? 1f : .4f); strText.setEnabled(hasSel);
+            float w = hasSel ? LoraSync.weight(sel) : 1f;
+            strBar.setProgress(Math.round(Math.min(w, 5f) * 20));
+            if (!strText.hasFocus()) strText.setText(String.format(java.util.Locale.US, "%.2f", w));
+            return;
+        }
         boolean has = !loraId().isEmpty() && loraSrc().exists();
         loraName.setText(has ? prefs().getString(lp() + "lora_name", "LoRA") : L.s("не выбрана", "none"));
         String hint = L.s("Файл .safetensors, проверяется при выборе. Библиотека: «LoRAs» над промптом.", "A .safetensors file, checked when imported. Long-press a LoRA in the Library for its trigger words, category or to delete it.");
@@ -812,10 +848,22 @@ public class Main extends MainEdit {
         strBar.setProgress(Math.round(Math.min(loraStr(), 5f) * 20));
         if (!strText.hasFocus()) strText.setText(String.format(java.util.Locale.US, "%.2f", loraStr()));
     }
-    float loraStr() { return prefs().getFloat(lp() + "lora_str", 1f); }
-    /** typed strength (0..3; the slider shows 0..2) */
+    float loraStr() {
+        if (!isMoss()) { File f = loraSelFile(); if (f != null) return LoraSync.weight(f); }   // mod: the strength lives on the LoRA's card
+        return prefs().getFloat(lp() + "lora_str", 1f);
+    }
+    /** mod: the slider / the typed number set the strength of the LoRA the card points at (and of its tag, when it is in the prompt) */
+    void setLoraStr(float v) {
+        if (isMoss()) { prefs().edit().putFloat(lp() + "lora_str", v).apply(); return; }
+        File f = loraSelFile();
+        if (f == null) return;
+        LoraSync.setWeight(f, v);
+        String n = LoraSync.name(f);
+        if (LoraSync.called(prompt.getText().toString(), n)) loraSetWeight(n, String.format(java.util.Locale.US, "%.2f", v));
+    }
+    /** typed strength (0..5) */
     void applyStrText() {
-        try { float v = Float.parseFloat(strText.getText().toString().trim().replace(',', '.')); v = Math.max(0f, Math.min(5f, v));   /* some LoRAs ask for 4-5 */ prefs().edit().putFloat(lp() + "lora_str", v).apply(); } catch (NumberFormatException ignored) { }
+        try { float v = Float.parseFloat(strText.getText().toString().trim().replace(',', '.')); v = Math.max(0f, Math.min(5f, v));   /* some LoRAs ask for 4-5 */ setLoraStr(v); } catch (NumberFormatException ignored) { }
         strBar.setProgress(Math.round(Math.min(loraStr(), 5f) * 20)); strText.setText(String.format(java.util.Locale.US, "%.2f", loraStr()));
     }
 
@@ -872,17 +920,29 @@ public class Main extends MainEdit {
         java.util.regex.Matcher m = loraTag(n).matcher(prompt.getText()); if (!m.find()) return null;
         return m.group(1) == null || m.group(1).trim().isEmpty() ? "1.0" : m.group(1).trim();
     }
+    /** mod: mounting a LoRA adds its tag and its trigger words (a character LoRA does nothing without them); both are de-duplicated */
     void loraAdd(String n, String w, String words) {
-        List<String> cur = tokens(prompt.getText().toString()), low = new ArrayList<>();
+        List<String> cur = tokens(prompt.getText().toString());
+        java.util.Set<String> low = new java.util.HashSet<>();
         for (String t : cur) low.add(t.toLowerCase(java.util.Locale.ROOT));
-        cur.add("<lora:" + n + ":" + w + ">");
+        if (low.add("<lora:" + n + ":" + w + ">".toLowerCase(java.util.Locale.ROOT))) cur.add("<lora:" + n + ":" + w + ">");
+        if (words != null) for (String t : words.split(",")) {
+            String q = t.trim();
+            if (!q.isEmpty() && low.add(q.toLowerCase(java.util.Locale.ROOT))) cur.add(q);
+        }
         prompt.setText(android.text.TextUtils.join(", ", cur)); prompt.setSelection(prompt.getText().length());
     }
     // ---- "ChatGPT style": the Anima LoRA "Style > gpt-image-2" by AgileNumbers (Civitai model 2564225, version 2998634; commercial use and derivatives allowed).
     // One tap downloads it into the LoRA library if needed (pinned file, SHA-256 checked) and adds its trigger word and <lora:gpt-image-2:0.8>; a second tap takes them out.
+    /** mod: unmounting takes the tag out and the trigger words it had put in (an automatic or trigger-word LoRA would come back otherwise) */
     void loraRemove(String n, String words) {
         String p = loraTag(n).matcher(prompt.getText().toString()).replaceAll("");
         List<String> keep = tokens(p);
+        if (words != null && !words.trim().isEmpty()) {
+            java.util.Set<String> drop = new java.util.HashSet<>();
+            for (String t : words.split(",")) if (!t.trim().isEmpty()) drop.add(t.trim().toLowerCase(java.util.Locale.ROOT));
+            for (int i = keep.size() - 1; i >= 0; i--) if (drop.contains(keep.get(i).toLowerCase(java.util.Locale.ROOT))) keep.remove(i);
+        }
         prompt.setText(android.text.TextUtils.join(", ", keep)); prompt.setSelection(prompt.getText().length());
     }
     void loraSetWeight(String n, String w) {
@@ -980,11 +1040,79 @@ public class Main extends MainEdit {
         if (busy) { Toast.makeText(this, L.s("Дождитесь окончания генерации", "Wait for the generation to finish"), Toast.LENGTH_SHORT).show(); return; }
         startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT).setType("*/*").addCategory(Intent.CATEGORY_OPENABLE), 9);
     }
-    void dropLora() {
+    /** mod: the single "selected file" slot of older versions becomes "automatic" on that file's card, then the slot is cleared */
+    void migrateLoraSlot() {
+        if (prefs().getBoolean("lora_migrated_v7", false)) return;
+        try {
+            String id = prefs().getString("anima_lora_id", "");
+            String file = prefs().getString("anima_lora_file", "");
+            if (!id.isEmpty() && !file.isEmpty()) {
+                File f = new File(AnimaLora.dir(getFilesDir()), file);
+                if (f.isFile()) {   // the tag itself is written by LoraSync.ensure at the next picture, so the prompt is not touched here
+                    LoraSync.setAuto(f, true);
+                    LoraSync.setWeight(f, prefs().getFloat("anima_lora_str", 1f));
+                }
+            }
+        } catch (Throwable ignored) { }
+        prefs().edit().remove("anima_lora_id").remove("anima_lora_name").remove("anima_lora_info").putBoolean("lora_migrated_v7", true).apply();
+    }
+    /** mod: mount the file's tag (+ its trigger words) in the prompt */
+    void addLoraTag(File f) {
+        String n = LoraSync.name(f);
+        loraAdd(n, String.format(java.util.Locale.US, "%.2f", LoraSync.weight(f)), Civitai.words(f));
+    }
+    /** mod: take every <lora:…> tag out of the prompt */
+    void clearLoraTags() {
+        String p = LoraSync.TAG.matcher(prompt.getText().toString()).replaceAll("");
+        List<String> keep = tokens(p);
+        prompt.setText(android.text.TextUtils.join(", ", keep)); prompt.setSelection(prompt.getText().length());
+    }
+    /** mod: the drop-down of the Anima LoRA card — every library file, ticked when the prompt calls it; a tap mounts or unmounts it */
+    void loraPicker() {
+        if (isMoss()) { loraLibrary(); return; }
+        final List<File> lib = LoraSync.library(getFilesDir());
+        if (lib.isEmpty()) { loraLibrary(); return; }   // nothing to pick: the library dialog can import a file
+        final String[] items = new String[lib.size()];
+        for (int i = 0; i < lib.size(); i++) {
+            File f = lib.get(i);
+            String n = LoraSync.name(f), words = Civitai.words(f);
+            boolean on = LoraSync.called(prompt.getText().toString(), n);
+            items[i] = (on ? "✓ " : "") + n + "  " + String.format(java.util.Locale.US, "%.2f", LoraSync.weight(f))
+                    + (LoraSync.auto(f) ? "  ⚡" : "") + (words.isEmpty() ? "" : "  ·  " + (words.length() > 34 ? words.substring(0, 34) + "…" : words));
+        }
+        builder().setTitle(Tr.s(this, "LoRAs of the prompt", "提示词里的 LoRA")).setItems(items, (d, i) -> {
+            File f = lib.get(i);
+            String n = LoraSync.name(f);
+            if (LoraSync.called(prompt.getText().toString(), n)) loraRemove(n, Civitai.words(f));
+            else { addLoraTag(f); prefs().edit().putString("anima_lora_sel", n).apply(); }
+            refreshLora();
+        }).setNeutralButton(Tr.s(this, "Library…", "库…"), (d, k) -> loraLibrary())
+                .setNegativeButton(L.s("Отмена", "Cancel"), null).show();
+    }
+    /** mod: ✕ of the Anima card — unmount everything, or delete one file, each after a confirmation */
+    void dropLoraAsk() {
         if (busy) return;
-        final boolean moss = isMoss(); final File ld = moss ? loraDir() : loraSrc();   // Anima: only the selected file leaves the library
-        prefs().edit().remove(lp() + "lora_id").remove(lp() + "lora_name").remove(lp() + "lora_info").apply();
-        ex2.submit(() -> { if (moss) MossLora.clearSelection(getFilesDir()); else MossLora.deleteTree(ld); ui.post(this::refreshLora); });
+        if (isMoss()) {
+            prefs().edit().remove(lp() + "lora_id").remove(lp() + "lora_name").remove(lp() + "lora_info").apply();
+            ex2.submit(() -> { MossLora.clearSelection(getFilesDir()); ui.post(this::refreshLora); });
+            return;
+        }
+        final File sel = loraSelFile();
+        List<String> items = new ArrayList<>();
+        items.add(Tr.s(this, "Unmount every LoRA from the prompt", "取消挂载提示词里的全部 LoRA"));
+        if (sel != null) items.add(Tr.f(this, "Delete the file of %s", "删除 %s 的文件", LoraSync.name(sel)));
+        builder().setTitle("LoRA").setItems(items.toArray(new String[0]), (d, i) -> {
+            if (i == 0) { clearLoraTags(); refreshLora(); return; }
+            builder().setMessage(Tr.f(this, "Delete %s from the library? The file leaves the phone.", "从 LoRA 库里删除 %s？文件会从手机里移除。", LoraSync.name(sel)))
+                    .setNegativeButton(L.s("Отмена", "Cancel"), null)
+                    .setPositiveButton(Tr.s(this, "Delete", "删除"), (d2, k) -> {
+                        String n = LoraSync.name(sel);
+                        sel.delete(); LoraSync.cardFile(sel).delete();
+                        if (n.equalsIgnoreCase(loraSel())) prefs().edit().remove("anima_lora_sel").apply();
+                        loraRemove(n, "");
+                        refreshLora();
+                    }).show();
+        }).setNegativeButton(L.s("Отмена", "Cancel"), null).show();
     }
     void importLora(Uri uri) {
         String nm = "LoRA";
@@ -1458,8 +1586,12 @@ public class Main extends MainEdit {
         String bad = isMage() ? Mage.sizeError(cw, ch) : isMoss() ? mossSizeError(cw, ch) : isQwen() ? Qwen.sizeError(cw, ch) : sizeError(cw, ch);
         if (bad != null) { Toast.makeText(this, bad, Toast.LENGTH_LONG).show(); return; }
         if (cw != resW || ch != resH) setRes(cw, ch);
+        if (prompt.getText().toString().trim().isEmpty()) { Toast.makeText(this, L.s("Введите описание", "Enter a prompt"), Toast.LENGTH_SHORT).show(); return; }
+        // mod: the LoRAs marked automatic, and those whose trigger words are in the prompt, get their <lora:name:weight> written here (visible,
+        // editable, and never removed by itself — the engine reloads when the set changes, which costs 40-60 s)
+        String synced = LoraSync.ensure(getFilesDir(), prompt.getText().toString());
+        if (!synced.equals(prompt.getText().toString())) { prompt.setText(synced); prompt.setSelection(prompt.getText().length()); }
         final String pr0 = prompt.getText().toString().trim();
-        if (pr0.isEmpty()) { Toast.makeText(this, L.s("Введите описание", "Enter a prompt"), Toast.LENGTH_SHORT).show(); return; }
         // memory guard: the model needs ~4.5 GB when it is not loaded yet, and a generation ~1.5 GB more; with less the phone swaps, heats up and can hang
         final long need = (loaded || isMoss() ? 0 : 4300) + 700, have = availMb();   // measured: the 2.9B model + a 512x768 picture took ~4.5 GB
         if (have < need && !memOk) {
@@ -1502,7 +1634,9 @@ public class Main extends MainEdit {
                     if (i >= curN || cancelled) { batchAdjustable = false; break; }
                     curIdx = i;
                 }
-                if (tooHot() && !waitCool(t0)) { hotStop = true; break; }   // pause before every image, including the first; Stop cancels the wait
+                // mod: the first picture is not blocked (a phone that is merely warm would otherwise refuse to make anything); a batch still
+                // pauses between pictures, and Stop cancels the wait
+                if (!(i == 0 && Settings.tempFirstFree(this)) && tooHot() && !waitCool(t0)) { hotStop = true; break; }
                 previewFile().delete();
                 pvTime = 0;
                 ui.post(() -> { if (busy) { img.setImageDrawable(null); showImg(false); placeholder.setVisibility(View.VISIBLE); } });
