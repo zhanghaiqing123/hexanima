@@ -1,195 +1,379 @@
-<h1 align="center">HexAnima</h1>
-<p align="center"><b>Anime image generation that runs entirely on your phone's NPU.</b><br>
-No root, no cloud, no account, no ads. Free and non-commercial.</p>
+# HexAnima 本地生图接口 · SillyTavern 适配（V73 / 8 Gen 2 · 8 Gen 3）
 
-<p align="center">
-  <img src="docs/screens/01-generate.jpg" width="240" alt="Generating a picture">
-  <img src="docs/screens/02-progress.jpg" width="240" alt="Progress and stop button">
-  <img src="docs/screens/08-history.jpg" width="240" alt="History">
-</p>
+> **本项目是 [ayanoby/hexanima](https://github.com/ayanoby/hexanima) 的 fork。**
+> 原版是最初的 HexAnima：Hexagon NPU 内核、采样器、设备端推理、App、模型包，整件事的基础。
+>
+> **Snapdragon 8 Gen 2（SM8550 / Hexagon V73）的移植与配套功能来自 [GrimmDev-Glitch/hexanima](https://github.com/GrimmDev-Glitch/hexanima)**
+> （MOSS-Image、Qwen-Image 编辑、Mage-Flow、LoRA 管理、Civitai、放大、修正、批量等）。
+> 本 fork 的 APK 基于它的 `1.9.5-v73` 发布版，并在此基础上做了三件事：
+>
+> 1. 加一个 **LocalDream 协议兼容的本地 HTTP 服务**（`127.0.0.1:8081`），让酒馆（SillyTavern）脚本、浏览器、`curl` 直接出图；
+> 2. 加 **模型导出 / 导入 / 离线目录 / 检查点转换**（与上游 1.8.3 的数据格式互通）；
+> 3. 把上游 **1.8.3 的六项体验功能**（保存位置、自动保存、下滑关闭、删除/停止确认、加载失败原因、时间预估与校准、批量张数修复）同步进 V73 版本。
 
-HexAnima runs the [Anima](https://huggingface.co/circlestone-labs/Anima) diffusion model and fine-tunes of it on the Hexagon NPU of Snapdragon 8 Gen 1 / 8+ Gen 1 phones.
-The diffusion transformer is executed by custom HMX kernels; the text encoder and the sampler run on the CPU.
-A 512x768 picture takes about **7 s** with the 2B models and **12 s** with the 2.9B models (4 steps, Xiaomi 12T Pro).
+```
+ayanoby/hexanima                 原版：NPU 内核、模型包、App 本体（MIT）
+  └─ GrimmDev-Glitch/hexanima     二创：Snapdragon 8 Gen 2 / Hexagon V73 移植 + 大量新功能
+       └─ 本项目（本仓库）          V73 版 + 本地 8081 接口 + 模型备份 + 上游 1.8.3 体验功能
+```
 
-It can also run **MOSS-Image 5B** (OpenMOSS, Apache-2.0), a larger model that you prompt with plain sentences. Its text encoder (Qwen3.5-9B), the transformer and the decoder all run on the NPU:
-about 30 s for 512x768 and about 80 s for 1 Mpx; any size with sides that are multiples of 16 (up to 6144 patches). It is an optional ~14 GB download.
+> 仓库同时保留上游 ayanoby/hexanima 的源码树（`app/`、`chainrun/`、`docs/` 等，MIT）作为参考；
+> 本项目的构建使用的是 GrimmDev `1.9.5-v73` 的源码（见[自己重新打包](#自己重新打包)）。
 
-And **Qwen-Image 2.1 Turbo** (Qwen team; with the 4-step Lightning LoRA by LightX2V or without it, 8 steps): it draws legible text inside pictures, follows long prompts, and **edits your photos by a prompt** ("make the sky a sunset"). The text encoder (Qwen3-VL-8B), its vision tower, the 7B transformer and the VAE all run on the NPU.
-About 40 s for 512x768, about 40-50 s for an edit (768x512 from a 512x512 photo); the weights (~14 GB, optional download) are streamed from storage for every picture. **Non-commercial use only** (Qwen Research License), see below.
-And **Mage-Flow-Edit-Turbo** (Microsoft, MIT): a 4B model that draws and **edits photos by a prompt** in about 12 seconds a picture (a text encoder, a ViT, a 12-block transformer and the VAE, all on the NPU). The weights are about 8.7 GB (optional download) and are streamed from storage for every picture.
-And **MiniMax-H3-Image** (MiniMax, 33B transformer and a Qwen3-VL text encoder, INT8-ConvRot, 6 steps without CFG, or 2 with the pDMD LoRA): sizes from 512 to 2048, about 2 minutes for 512x768 (the weights stream from storage for every picture). It is an optional 48 GB download from its own public repository `ayanoby/hexanima-h3`; **MiniMax community licence: not for the US, EU, UK and South Korea, outputs must not be used to improve other AI models** (the app asks for consent first). Powered by MiniMax-H3-Image.
-And **FLUX.3 Image Klein** (Black Forest Labs, 5.6B, non-commercial FLUX Kommunity License): photorealism and legible text, 16 steps without CFG, about a minute for 512x512, with a live preview (9 GB, in the download catalog).
-And **LTX-2.5 Video** (Lightricks, 22B distilled, LTX-2 Community License): short video from a prompt or from a photo (17-97 frames, 8 steps, no sound), saved as an MP4 with a player in the app (31 GB, in the download catalog). **MiniMax-H3 Ref2VA** makes video with a reference photo (the converted files are put in by hand, see `h3/NOTES_REF2VA.md`).
+**一切功劳归上游。** 如果你觉得这个 App 好用，请去给 [ayanoby](https://github.com/ayanoby) 和 [GrimmDev-Glitch](https://github.com/GrimmDev-Glitch) 点 star。
 
-## Features
+---
 
-- Fully offline after the models are downloaded; nothing leaves the phone.
-- Base models only, speed from a LoRA file you pick: a **Turbo LoRA** row under every model (any compatible `.safetensors`, a strength slider, a check at once) and the **number of steps entered by hand** (the LoRA's own step count, usually 4 or 8). Anima, Qwen-Image 2.1 Turbo and MOSS-Image all work this way.
-- Anima: MiaoMiao models in 2B and 2.9B (any size with sides that are multiples of 16 up to 65536 patches, e.g. 4096×4096: the attention is chunked and big blocks run in windows; 2560×2048 takes about 80 s per DiT step on 2B), base checkpoints with CFG and a negative prompt, or with a Turbo LoRA (Anima Turbo v1.1, TURBO V4 and others) for 4 steps; one-tap model manager with search, resumable downloads, sha256 verification, delete to free space.
-- Own wallpaper with adjustable block transparency; a ZIP of the whole History in one tap; unlimited prompt history with saved prompts.
-- Size picker with portrait / landscape / square presets (all multiples of 16) and custom sizes, seed, batch of several pictures, stop button.
-- History with favourites, trash, multi-select, share and save; settings are stored in the PNG, so any picture can be reopened with its prompt and seed.
-- Prompt tag suggestions (Danbooru tags), templates, quality-tag prefix (Anima models only; MOSS-Image takes plain sentences and gets no tags).
-- Photo editing with Qwen-Image or Mage-Flow: pick a photo, write what to change; the result keeps the photo's shape (Qwen reduces the photo to about 0.4 Mpx).
-- Live preview: after every step the picture-to-be shows on the main screen (the current x0 estimate of the latent turned into colours by a small fitted linear map, no VAE run, a few milliseconds).
-- Qwen-Image takes up to three pictures at once ("the girl from picture 1 stands in front of the cafe from picture 2"): add them under the photo, each is reduced so that all of them fit the attention (about 0.3 Mpx each for two, 0.2 Mpx for three).
-- Your own LoRA for MOSS-Image: pick a `.safetensors` file, the app checks it at once (layer names, shapes, rank, data type) and says why if it does not fit; a strength slider (0-2). The LoRA is folded with the 4-step adapter (or replaces the Turbo slot) on the phone (about 15 s the first time) and never leaves the device.
-- Your own LoRA for the Anima models too (kohya, diffusers/PEFT, LyCORIS LoKr and LoHa; 28 or 40 blocks): the app checks the file header, folds the LoRA into the block weights when the model loads (the first picture with a new LoRA set takes about 12-13 s longer, then it is cached; a Turbo LoRA and a regular one fold together) and keeps it as 8-bit blocks. The text-encoder part of a LoRA is not applied. The folding code is based on a pull request by GrimmDev-Glitch.
-- Low-memory mode for the Anima models (on by default below ~9.5 GB of RAM, in Settings): the DiT blocks are streamed from storage through two buffers instead of being pinned in RAM; about 2.5 GB less RAM for the 2.9B models, +1 s per 512x768 picture on a 12 GB phone.
-- **Export and import of models** (Models screen): copy an installed model to the phone gallery folder of your choice, an SD card or a USB drive and back without downloading it again (sizes and sha256 are checked; the weights are still run from the phone's own storage). The model list and Delete also work without internet.
-- **Where pictures go:** Settings choose the place the Download button saves to (the phone gallery or any folder) and an optional **save right after generating**; Stop, Delete and the picture-to-tags / RIFE downloads are confirmed or listed on the Models screen; swipe down closes a picture or a video in the viewer.
-- **Time on the Generate button learns from your phone:** every run is measured per size and steps (text / DiT / decode times for Anima and Klein), the estimate interpolates between the measured sizes, and **Time calibration** (menu) measures three sizes for the selected model in a few minutes.
-- Live RAM meter, thermal / battery warnings, the model unloads itself when idle.
-- Light / dark / system themes, notifications, 13 languages (English, Russian, Chinese, Japanese, Korean, Spanish, Portuguese, German, French, Indonesian, Turkish, Vietnamese, Hindi).
+## 目录
 
-## Picture quality
+* [版本与产物](#版本与产物)
+* [来源与致谢](#来源与致谢)
+* [下载与安装](#下载与安装)
+* [8081 端口说明](#8081-端口说明)
+* [接口文档](#接口文档)
+* [新增功能（v1 → v4）](#新增功能v1--v4)
+* [它是怎么接进去的](#它是怎么接进去的)
+* [自己重新打包](#自己重新打包)
+* [已测试](#已测试)
+* [已知限制](#已知限制)
+* [许可证与第三方](#许可证与第三方)
 
-Straight from the phone, 512x768, 4 steps, no upscaling, no editing (screenshots of the app; the date and battery are cropped out).
+---
 
-<p align="center">
-  <img src="docs/screens/quality/3d-harem-2b.jpg" width="190" alt="MiaoMiao 3D Harem 2B">
-  <img src="docs/screens/quality/realskin-2b.jpg" width="190" alt="MiaoMiao RealSkin 2B">
-  <img src="docs/screens/quality/harem-2.9b.jpg" width="190" alt="MiaoMiao Harem 2.9B">
-  <img src="docs/screens/quality/realskin-2.9b.jpg" width="190" alt="MiaoMiao RealSkin 2.9B">
-</p>
-<p align="center"><sub>3D Harem LH3D 1.1 (2B, ~7 s) · RealSkin Anima 1.3 (2B, ~7 s) · Harem 2.9B BETA 1.1 (~12 s) · RealSkin 2.9B 1.0 (~12 s)</sub></p>
+## 版本与产物
 
-### MOSS-Image
+| 版本 | 产物 | 服务版本 `/status` | 内容 |
+|---|---|---|---|
+| v2 | `HexAnima-1.9.5-v73-localapi-v2.apk` | `1.9.5-v73+api3` | 8081 接口 + 参数继承 |
+| v3 | `HexAnima-1.9.5-v73-localapi-v3.apk` | `1.9.5-v73+api3d` | 模型导出/导入、离线目录、检查点文件夹转换、模型页 MODEL BACKUP 卡片 |
+| v4 | `HexAnima-1.9.5-v73-localapi-v4.apk` | `1.9.5-v73+api4` | 上游 1.8.3 六项功能 + 备份界面中英双语 |
 
-Four different prompts, 768x1024, 4 steps, about 60 s each, straight from the phone (same method as above, nothing retouched). Text in the picture is a strength of MOSS-Image but not a guarantee:
-short words usually come out right, longer or secondary text (shop-front boards, book covers, small signs) is often garbled. The pictures below are the first and only attempt for each prompt, bad text left as it is.
+逐版本细节见 [CHANGES.md](CHANGES.md)。
 
-<p align="center">
-  <img src="docs/screens/quality/moss-1.jpg" width="190" alt="MOSS-Image: coffee shop with a neon sign">
-  <img src="docs/screens/quality/moss-2.jpg" width="190" alt="MOSS-Image: fox reading a book, poster title">
-  <img src="docs/screens/quality/moss-3.jpg" width="190" alt="MOSS-Image: girl holding a board with text">
-  <img src="docs/screens/quality/moss-4.jpg" width="190" alt="MOSS-Image: arcade machine, GAME OVER screen">
-</p>
-<p align="center"><sub>"neon sign that says OPEN LATE" (the sign is right, the boards are not) · "title at the top says THE LAST LIBRARY" (title right, subtitle garbled) · "board that says HEXANIMA" (right) · "the words GAME OVER in pixel font" (readable, with small glitches)</sub></p>
+> APK 的 `versionCode` / `versionName` 与基础包一致（`33` / `1.9.5-v73-sm8650`），
+> 安装后判断版本只能看 `curl http://127.0.0.1:8081/status` 里的 `version` 字段。
 
-**Your own LoRA.** Pick a `.safetensors` file made for MOSS-Image; the app checks it at once (layer names, shapes, rank, data type) and tells you why if it does not fit (a FLUX or SDXL LoRA, a wrong shape, a rank above 128, a text-encoder-only file...). A strength slider goes from 0 to 2.
-The LoRA is folded with the 4-step adapter (or replaces the Turbo slot) on the phone (about 15 s the first time for a new LoRA or strength, then cached) and never leaves the device. Left: without a LoRA, right: with a third-party style LoRA from Civitai (same prompt, seed and size; LoRAs stay under their authors' licenses).
+---
 
-<p align="center"><img src="docs/screens/quality/moss-lora-compare.jpg" width="640" alt="Without and with a LoRA"></p>
+## 来源与致谢
 
-Limits worth knowing: MOSS-Image only does text-to-image (no editing or image input), it needs about 14 GB of storage and was tested on a 12 GB phone only, and its weights are streamed from storage for every picture, so a picture takes 30 s at 512x768 and about 80 s at 1 Mpx.
+| 项目 | 作者 | 贡献 |
+|---|---|---|
+| [ayanoby/hexanima](https://github.com/ayanoby/hexanima) | [@ayanoby](https://github.com/ayanoby) | **原版**：Hexagon NPU 内核、稳定扩散采样器、设备端推理、App、模型包。本仓库即它的 fork。 |
+| [GrimmDev-Glitch/hexanima](https://github.com/GrimmDev-Glitch/hexanima) | [@GrimmDev-Glitch](https://github.com/GrimmDev-Glitch) | **Snapdragon 8 Gen 2（Hexagon V73）支持**与大量扩展功能；本项目的 APK 基于其 `1.9.5-v73` 发布版。 |
+| 本项目 | [@zhanghaiqing123](https://github.com/zhanghaiqing123) | 本地 HTTP 接口、酒馆脚本适配、模型备份、上游 1.8.3 功能同步，见 [NOTICE.md](NOTICE.md)。 |
 
-### Qwen-Image 2.1 Turbo
+**V73 移植的功劳属于 GrimmDev-Glitch**：没有那次移植，这个接口不可能在 8 Gen 2 / 8 Gen 3 上跑起来。
+本仓库只做"把接口和体验功能接到已经移植好的 V73 版本上"，没有修改任何 NPU 内核或生成算法。
 
-Text-to-image: four prompts, three portrait 512x768 and one landscape 768x512, 4 steps, 40-50 s each, straight from the phone (nothing retouched, the first attempt for each prompt). The text in the picture is read from the prompt: the sign says `HEXANIMA`, the chalkboard `Fresh Coffee $3`, the neon sign `OPEN`.
+---
 
-<p align="center"><img src="docs/screens/quality/qwen-t2i.jpg" width="760" alt="Qwen-Image 2.1 Turbo: anime girl with a HEXANIMA sign, girl with a red scarf on a snowy street, old fisherman, coffee shop with OPEN sign"></p>
+## 下载与安装
 
-**Editing a photo by a prompt.** The same four pictures after one edit each (the picture is the photo, the sentence is the whole instruction; an edit takes about a minute):
-"make her hair pink and change the sign text to "HELLO"" · "make it a sunny summer day: no snow, green trees and a blue sky" · "turn him into a smiling man wearing a red knitted hat" · "change the neon sign text from "OPEN" to "CLOSED"". Everything not mentioned stays as it was.
+优先使用 [Releases](../../releases) 里的 APK；没有 release 时可按[自己重新打包](#自己重新打包)构建（产物约 174 MB）。
 
-<p align="center"><img src="docs/screens/quality/qwen-edits.jpg" width="760" alt="The same four pictures after editing: pink hair and a HELLO sign, a sunny day, a red knitted hat, CLOSED instead of OPEN"></p>
+**安装前必读：**
 
-Limits worth knowing: about 14 GB of storage, tested on a 12 GB phone only, weights are streamed from storage for every picture (RAM use stays near 1.2 GB), the photo for an edit is reduced to about 0.4 Mpx, and **non-commercial use only** (Qwen Research License).
+1. **先卸载手机上原有的 HexAnima**（官方版 / GrimmDev 版都算）。本项目用独立 key 签名，和上游签名不兼容。
+2. ⚠️ **卸载会清掉 `files/anima` 里的模型**（几个 GB），需要在 App 里重新下载，或提前用 v3+ 的「导出」备份。
+3. 装好打开一次，选模型、下载模型，然后可以切到后台（**别从最近任务里划掉**）。
+4. 之后本项目的小版本升级都用同一个 key，可以直接覆盖安装，数据不再丢。
 
-### Mage-Flow-Edit-Turbo
+已装过本项目旧版（同 key）时直接覆盖安装即可，模型不用重下。
 
-Text-to-image: four prompts at 576x768, 4 steps, about 12 s each, straight from the phone (nothing retouched, the first attempt for each prompt): a red fox in a snowy forest, a latte by a rainy window, an anime girl with silver hair under an umbrella, an anime village with a torii gate.
+---
 
-<p align="center"><img src="docs/screens/quality/mage-t2i.jpg" width="760" alt="Mage-Flow-Edit-Turbo: a red fox in the snow, a latte by a window, an anime girl with an umbrella, an anime village with a torii gate"></p>
+## 8081 端口说明
 
-**Editing a photo by a prompt.** The same four pictures after one edit each (about 21 s at this size): "turn the scene into a snowy night with a full moon" · "make it a sunny morning outside the window" · "change her hair to pink and make it a bright daytime scene" · "turn it into winter, covered in snow, with no cherry blossoms". The first and third edits did what they were asked, the second and fourth only partly (the light got warmer, snow lay on the gate but the blossoms stayed): short, concrete instructions work best.
+这是本项目唯一对外的东西，也是最容易踩坑的地方。
 
-<p align="center"><img src="docs/screens/quality/mage-edits.jpg" width="760" alt="The same four pictures after editing: a night with a moon, warmer light, pink hair, snow on the torii gate"></p>
+### 监听范围
 
-Limits worth knowing: about 8.7 GB of storage, tested on a 12 GB phone only, pictures up to 6144 patches (for example 1536x1024) and edits up to 3200 patches (1024x768), the MIT license.
+| 项 | 值 |
+|---|---|
+| 地址 | **`127.0.0.1:8081`**（只绑定回环，不监听 `0.0.0.0`） |
+| 协议 | 明文 HTTP，无 TLS、无鉴权 |
+| 端口 | **固定 8081**，运行时不可改（见[自己重新打包](#自己重新打包)） |
+| 启动时机 | `HexAnima` 进程启动（`Main.onCreate`）时起线程；**进程被杀后要重新打开一次 App** |
+| 开机自启 | 没有（需要改 Manifest，本项目刻意不做） |
 
-## A tour of the app
+因为只绑回环，**同一台手机上的 App 都能访问，局域网/公网访问不到**。
 
-<table>
-<tr>
-<td align="center" width="33%"><img src="docs/screens/03-suggestions.jpg" width="220"><br><b>Tag suggestions</b><br><sub>Danbooru tags complete as you type</sub></td>
-<td align="center" width="33%"><img src="docs/screens/04-templates.jpg" width="220"><br><b>Templates</b><br><sub>Recent and saved prompts</sub></td>
-<td align="center" width="33%"><img src="docs/screens/05-size.jpg" width="220"><br><b>Size picker</b><br><sub>Portrait, landscape, square, custom</sub></td>
-</tr>
-<tr>
-<td align="center"><img src="docs/screens/06-model-picker.jpg" width="220"><br><b>Model picker</b><br><sub>Switch models in one tap</sub></td>
-<td align="center"><img src="docs/screens/07-model-manager.jpg" width="220"><br><b>Model manager</b><br><sub>Size, speed, download and delete</sub></td>
-<td align="center"><img src="docs/screens/10-viewer.jpg" width="220"><br><b>Picture details</b><br><sub>Prompt, seed, size, model; reuse the settings</sub></td>
-</tr>
-<tr>
-<td align="center"><img src="docs/screens/09-select.jpg" width="220"><br><b>Multi-select</b><br><sub>Favourite, save, share or trash many at once</sub></td>
-<td align="center"><img src="docs/screens/11-favourites.jpg" width="220"><br><b>Favourites</b><br><sub>Starred pictures in one place</sub></td>
-<td align="center"><img src="docs/screens/12-settings.jpg" width="220"><br><b>Settings</b><br><sub>Language, theme, idle unload, quality tags</sub></td>
-</tr>
-<tr>
-<td align="center"><img src="docs/screens/13-info.jpg" width="220"><br><b>Info</b><br><sub>Why 4 steps, which sizes work, MOSS-Image and LoRA notes, licenses</sub></td>
-<td align="center"><img src="docs/screens/14-light.jpg" width="220"><br><b>Light theme</b><br><sub>Light, dark or follow the system</sub></td>
-<td align="center"><img src="docs/screens/15-languages.jpg" width="220"><br><b>13 languages</b><br><sub>Chosen in Settings</sub></td>
-</tr>
-<tr>
-<td align="center"><img src="docs/screens/16-trash.jpg" width="220"><br><b>Trash</b><br><sub>Deleted pictures stay 30 days, restore any time</sub></td>
-<td align="center"><img src="docs/screens/17-moss.jpg" width="220"><br><b>MOSS-Image</b><br><sub>Plain-sentence prompts, any size</sub></td>
-<td align="center"><img src="docs/screens/18-lora.jpg" width="220"><br><b>Your LoRA</b><br><sub>Checked at once, strength slider, prepared on the phone</sub></td>
-</tr>
-<tr>
-<td align="center"><img src="docs/screens/19-moss-models.jpg" width="220"><br><b>Five models</b><br><sub>MOSS-Image next to the four Anima models</sub></td>
-<td align="center"><img src="docs/screens/20-info-moss.jpg" width="220"><br><b>Info: MOSS-Image</b><br><sub>Sizes, LoRA, licenses</sub></td>
-<td></td>
-</tr>
-</table>
+### 为什么是 8081
 
-## Requirements
+酒馆的 [LocalDream](https://github.com/xororz/local-dream) 生图脚本把地址写死成 `http://127.0.0.1:8081`，
+协议也是它定的（SSE + base64 原始 RGB）。为了**酒馆脚本一行不改**就能用，这里照抄了协议和端口。
 
-- A phone with **Snapdragon 8 Gen 1 or 8+ Gen 1** (SM8450 / SM8475, Hexagon V69): the tested target.
-- **Snapdragon 8 Elite** (SM8750, Hexagon V79, e.g. Galaxy S25): not supported. Versions 1.2.0 and 1.2.1 had experimental support, withdrawn in 1.2.2: on a tester's Galaxy S25 the NPU matrix unit is sometimes silently unavailable after an interrupted run (garbage pictures) and large sizes come out as noise. A proper port is not planned in the short term.
-- Other chips (Snapdragon 8 Gen 2 / 8 Gen 3, SM8550 / SM8650) are not supported yet; the app tells you if yours is not.
-- Android 10 or newer, 64-bit. No root needed.
-- RAM: tested on a 12 GB phone (about 10.9 GB usable). Phones with 8 GB are supported through the low-memory mode (reported crash: issue #1); the 2.9B models need the most. Storage: 1.2 GB for the shared files plus 3.6-4.2 GB per Anima model; MOSS-Image needs about 14 GB (and ~300 MB more while a user LoRA is in use) and Qwen-Image about 14 GB. MOSS-Image and Qwen-Image were tested on a 12 GB phone only.
+### ⚠️ 和 Local Dream 冲突
 
-## Install
+**Local Dream 也占 `127.0.0.1:8081`。** 两者不能同时工作：
 
-1. Download `HexAnima-<version>.apk` from the [Releases](../../releases) page and install it (allow installs from your browser or file manager).
-2. Open the app and pick a model in **Models**. The files are downloaded from Hugging Face (`ayanoby/anima-npu-packs`) the first time.
-3. Type a prompt (Danbooru-style tags work best), press **Generate**.
+* 两个 App 都开着时，**谁先绑定谁赢**，后来者绑定失败（本项目会在 `/log` 里留一条 `bind failed`）。
+* 切换：把另一个 App **彻底退出**（最近任务划掉，或系统设置里强制停止），再打开要用的那个。
+* 想换端口：改 `src/com/hexanima/npu/ApiServer.java` 的 `PORT` 常量重新打包，酒馆脚本同步改。
 
-MOSS-Image, Qwen-Image, Mage-Flow and MiniMax-H3-Image are separate downloads in the same manager (each lives in its own Hugging Face repository with its own `LICENSE` and `NOTICE.md`).
+### 谁能调它 / 怎么调
 
-Tips: download a base model, pick a Turbo LoRA file under it and set the steps the LoRA was made for (usually 4 or 8); without a Turbo LoRA use more steps (Anima base also takes CFG and a negative prompt). See **Info** in the app for the other notes. Versions before 1.5.0 shipped merged Turbo checkpoints; they are replaced by base + LoRA and can be deleted in the manager.
+| 调用方 | 做法 |
+|---|---|
+| 酒馆（SillyTavern） | 酒馆跑在 `127.0.0.1:8000`，用仓库里的 `sillytavern/酒馆助手脚本-手机本地生图v7.6.json`，地址填 `127.0.0.1:8081`（默认就是） |
+| 手机浏览器 | 打开 **`http://127.0.0.1:8081/test`**，自带自测页 |
+| 其它脚本 / 命令行 | `curl -N -X POST http://127.0.0.1:8081/generate -H 'Content-Type: application/json' -d '{"prompt":"1girl, solo"}'` |
+| 从电脑 | 需要 `adb reverse tcp:8081 tcp:8081`（会把端口暴露给 adb 侧，见安全提醒） |
 
-## Disclaimer
+CORS 全开（`Access-Control-Allow-Origin: *`，并带 `Access-Control-Allow-Private-Network: true`），
+酒馆那个 `127.0.0.1:8000` 的页面能直接跨端口调用，不需要代理。
 
-**HexAnima is an independent, unofficial project. It is not affiliated with, endorsed by, sponsored by or otherwise connected to CircleStone Labs, NVIDIA, Qualcomm, Alibaba (Qwen), Microsoft, LightX2V, OpenMOSS, Unsloth, Black Forest Labs or the authors of the models it can download.**
-"Anima" and "Cosmos" refer to third-party models, "NVIDIA" and "Qualcomm", "Snapdragon", "Hexagon" are trademarks of their respective owners.
-They are used only to describe what the software works with.
-The models (MiaoMiao Harem / 3D Harem / RealSkin by MIAOKA, based on Anima by CircleStone Labs and NVIDIA Cosmos) stay under their authors' licenses: non-commercial use only.
-Turbo (distillation) LoRAs are separate files that you pick yourself (for example Anima Turbo v1.1 Lora by somedoby, TURBO for ANIMA (V4-29B) by n_Arno, Lightning by LightX2V); they stay under their authors' licenses. See `THIRD_PARTY.md`.
-MOSS-Image, Qwen3.5-9B, the rapid-moss 4-step adapter (darask0, on lodestones' 8-step DMD), the FLUX.2 small decoder (Black Forest Labs) and the Unsloth GGUF quantisations are all under the **Apache License 2.0**; the MOSS-Image pack holds converted copies (the changes are listed in its `NOTICE.md`, also shown in the app under Info -> Licenses).
-Built with Qwen. **Qwen-Image 2.1 Turbo and the Lightning v2-RL adapter (LightX2V; its repository declares no license of its own, so it is treated as a derivative of the Qwen Materials) are under the Qwen Research License Agreement: non-commercial use only**, no redistribution of the model under another name, and the licence text travels with the files. Qwen3-VL-8B (Qwen team) and the Unsloth GGUF quantisations are Apache-2.0. The Qwen-Image pack holds converted copies (changes in its `NOTICE.md`, also in the app under Info -> Licenses). Qwen is a trademark of its owner, used only to name the model.
-Mage-Flow-Edit-Turbo and Mage-VAE (Microsoft) are under the **MIT License**; the Qwen3-VL-4B text encoder and vision tower that ship with it are Apache-2.0. The Mage-Flow pack holds converted copies (changes in its `NOTICE.md`, also in the app under Info -> Licenses).
-LoRA files that you load yourself stay under their authors' licenses; check them before you share pictures made with them.
-A model author can ask for removal of their model from the download catalog: open a discussion in the Community tab of the model packs repository.
+### 安全提醒
 
-## Third-party components
+* **没有鉴权、没有加密**。手机里任何一个 App（包括恶意 App）都能调这个接口，占着 NPU 出图、拿到生成的图片。
+* **不要**通过 `adb reverse`、路由器端口映射、内网穿透之类手段暴露到局域网/公网。
+* 只在你自己可控的手机上使用；用完可以「强制停止」App 把端口收掉。
 
-The APK includes the Qualcomm AI Engine Direct (QNN) runtime libraries (`libQnnHtp*.so`, `libQnnSystem.so`) under the Qualcomm AI Stack License.
-They are redistributed only in object code and only as part of the app, never standalone; the license text and the third-party notices are in `app/assets/licenses/` and in the app (Info -> Licenses).
-Qualcomm may terminate that license at any time, in which case distribution of the APK stops.
+### 排障
 
-## Layout
+| 现象 | 原因 / 处理 |
+|---|---|
+| 浏览器打不开 `/test` | App 没在跑：重新打开一次，确认没被系统杀掉 |
+| `connection refused` | 同上；或进程刚启动还没起线程（等 1 秒） |
+| `bind failed` | 8081 被占了：多半是 Local Dream 在跑，退出它 |
+| 请求返回 `HexAnima is not running` | App 进程还活着但 Activity 已销毁，重新打开 App |
+| 出图报 `the phone got too hot` | 撞温控了，等手机凉下来，或降低步数/分辨率 |
+| 模型加载一直转 | 见「时间与加载」；v4 起最多等 5 分钟并弹窗说明原因 |
 
-- `app/`: the Android app (plain Java, built without Gradle by `app/build.sh`), package `com.hexanima.npu`. Languages in `app/assets/lang/`.
-- `phone/`: the on-device server (`animad.cpp`) and `anima.sh`, which the app runs.
-- `chainrun/`, `hexagon/mega/`: helper processes and the Hexagon HMX kernels (see `THIRD_PARTY.md` for the Qualcomm files you have to supply).
-- `flux3/`, `ltx/`: FLUX.3 Klein and LTX-2.5 (kernels, runners, pack conversion; `flux3/hexagon/mega` is the kernel tree shared with MiniMax-H3 Ref2VA, whose runner is `h3/hexagon/mega/r2vrun.cpp`). See `flux3/README.md`, `ltx/README.md`, `h3/NOTES_REF2VA.md`.
-- `patches/`: patches for stable-diffusion.cpp (NPU/TE/VAE hooks, serve mode); `android/build_sd.sh` builds it.
-- `export/`, `tools/`: model conversion (`make_pack.py` builds the downloadable packs), translations (`build_lang.py`, `lang/`), `stage_jnilibs.sh`.
-- `docs/PITFALLS.md`: engineering notes on the NPU work.
+---
 
-## Build
+## 接口文档
 
-You need the Android SDK (build-tools 34, platform 34), Docker, the Qualcomm QNN SDK (download it from Qualcomm and accept its license) and, for the DSP kernels, the Hexagon SDK.
-Paths in the scripts default to `~/anima-npu/sdk/...`. The order is: build the native helpers (`phone/build.sh`, `chainrun/build.sh`, `hexagon/mega/build*.sh`, `android/build_sd.sh`),
-copy them with `tools/stage_jnilibs.sh`, then `app/build.sh` produces and installs `hexanima.apk`.
-The model packs are built by `tools/make_pack.py` and downloaded by the app from a Hugging Face repository (set in `Main.DEFAULT_BASE`).
+### `POST /generate`（SSE，和 LocalDream 一致）
 
-## License
+请求体：
 
-The HexAnima source code is MIT (`LICENSE`). Models, QNN and the other components keep their own licenses: see `THIRD_PARTY.md`.
-The app shows all required license texts and notices (Info -> Licenses): Qualcomm AI Stack License, QNN notices, Apache License 2.0 and the MOSS-Image notice; the files are in `app/assets/licenses/`.
+```json
+{
+  "prompt": "1girl, solo, ...",
+  "negative_prompt": "worst quality, ...",
+  "steps": 6,
+  "cfg": 1,
+  "scheduler": "euler_a",
+  "size": 512,
+  "width": 512, "height": 512,
+  "aspect_ratio": "2:3",
+  "seed": 123456
+}
+```
+
+* 尺寸三选一：`size`（正方形边长）/ `width`+`height` / `aspect_ratio`（会算成最接近的合法尺寸）。
+* App 只接受：宽高都 ≥256 且是 16 的倍数，并且 `(宽/16)×(高/16)` 能被 32 整除。接口会自动往上修正到最近合法值。
+* `scheduler` 和 `sampler` 都认；只给 `sampler` 时调度器沿用 App 里的。
+* `seed` 省略则随机，并在返回里如实回报。
+* `denoise_strength`、`show_diffusion_process`、`lora_dir`、`lora_strength` 目前**忽略**（纯文生图）。
+
+### 参数继承（请求优先，缺省听 App 的）
+
+**请求里给了的参数优先；没给、或给空值/0 的，一律用 App 里当前那份配置。**
+
+| 字段 | 传了 | 没传 / `""` / 0 | `null` |
+|---|---|---|---|
+| `prompt` | 用 | 报错（必填） | 报错 |
+| `negative_prompt` | 用 | 用 App 里的负向词 | **明确要空负向词** |
+| `steps` | 用（夹到 1–60） | 用 App 里的步数 | 同左 |
+| `cfg` | 用 | 用 App 里的 CFG | 同左 |
+| `scheduler` / `sampler` | 用 | 用 App 里的采样器 + 调度器（成对） | 同左 |
+| 尺寸 | 用 | 用 App 当前分辨率 | 同左 |
+| `seed` | 用 | 随机 | 随机 |
+
+"用 App 里的"取的是**出图时真正生效的那份配置**：步数 / CFG / 负向 / 采样器 / 调度器走 App 自己的
+`Settings.steps/cfg/negative/sampler/scheduler`，尺寸取界面上的宽高。所以 App 里刚改完，下一次极简请求立刻跟着变。
+
+而且**只回写请求里真给了的字段**：极简脚本调用一百次，也不会动 App 里存的配置。
+
+最小请求可以只有一行：
+
+```json
+{"prompt": "1girl, solo"}
+```
+
+日志里会标出这次哪些字段是继承来的，例如 `inherit=[negative,steps,cfg,sampler,size]`。
+
+### 响应（`text/event-stream`）
+
+```
+data: {"type":"progress","step":4,"total_steps":6,"percent":66}
+
+data: {"type":"complete","image":"<base64 原始 RGB>","width":512,"height":512,"seed":123456,"generation_time_ms":13671}
+
+data: {"type":"error","message":"..."}
+```
+
+`image` 是裸 RGB（每像素 3 字节，无行填充、无 alpha），和 LocalDream 一致，前端用 canvas 还原即可。
+`512×512` 对应 base64 `1,048,576` 字符。
+
+### 其它端点
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/` 或 `/health` | 在线探测（酒馆脚本用它判断服务是否在线） |
+| GET | `/status` | 状态：`version`、模型、是否生成中、当前界面、最后一条错误 |
+| GET | `/props` | App 当前生效的 steps / cfg / sampler / scheduler / 负向 / 分辨率 |
+| GET | `/log` | 纯文本日志（最近 400 行），出问题先看这个 |
+| GET | `/diag` | 诊断合集（v4）：版本、files 目录、目录缓存、已装模型、备份日志 |
+| GET | `/card` | 在模型页重建 MODEL BACKUP 卡片（调试用） |
+| GET | `/preview.png` | 当前这一步的预览图 |
+| GET | `/last.png` | 上一张成品原图 |
+| GET | `/test` | 内置自测页（含「极简模式」勾选框） |
+
+> `/diag`、`/card`、`/props` 是调试口，正式发布前可以删除。
+
+---
+
+## 新增功能（v1 → v4）
+
+### v1 · 本地接口
+8081 HTTP/SSE；反射驱动 App 自己的生成流程（同一套 UI 管线、同一份设置）。
+
+### v2 · 参数继承
+请求缺省字段从 App 当前设置继承，酒馆脚本不用再传一堆参数。
+
+### v3 · 模型备份（与上游 1.8.3 数据格式互通）
+模型页顶部 **MODEL BACKUP** 卡片：
+* 单个/全部**导出**到自选文件夹（SAF）或一键 `Download/HexAnimaBackup`；
+* **导入**文件夹（校验 `size + sha256`，用 `hdr.bin` 重建 stub）；
+* **离线目录**（`files/catalog.cache`，断网也能看/删模型）；
+* **文件夹批量 `.safetensors` 转换**（`libanimaconv.so`，免复制、读 header 判断 2B/2.9B）。
+
+### v4 · 同步上游 1.8.3 六项功能 + 中文化
+1. **图片保存位置 + 生成后自动保存**（设置页；手机相册或任意文件夹，SAF 持久授权）；
+2. **查看器下滑关闭**（跟手、上下栏淡出，左右翻页/缩放不变）；
+3. **删除 / 停止确认**（模型删除、生成中「停止」都要先确认）；
+4. **模型加载失败原因**（`anima.sh` 最多等 5 分钟，失败写 `load_error`，弹窗显示芯片与日志尾）；
+5. **时间预估学习 + 校准 + 分段计时**（`files/timings.json`；菜单「时间校准」；查看器显示 text / DiT / decode 秒数）；
+6. **批量张数修复**（生成中改张数只影响下一次）。
+
+另外：模型备份卡片与弹窗中英双语，默认跟随手机语言，弹窗底部可切换。
+
+---
+
+## 它是怎么接进去的
+
+App 原本只有「点按钮出图」一条路。本项目**不修改生成算法**，只做两类改动：
+
+**A. 新增类（`src/`）**
+
+| 类 | 作用 |
+|---|---|
+| `ApiServer` | 8081 HTTP/SSE；`start()` / `onProgress()` / `onFinish()` 三个入口；出图靠反射调用 `Main.generate(false)` |
+| `Backup` | 模型导出/导入、离线目录、MODEL BACKUP 卡片、中英双语 |
+| `Ckpt` | 文件夹批量 `.safetensors` → 模型转换 |
+
+**B. 从 fork 源码重编的类（`repo/forkmod/`，v4 起）**
+
+| 类 | 改动 |
+|---|---|
+| `Main` | `ApiServer.start/onFinish` 调用、停止确认、时间预估与校准、张数语义 |
+| `MainRun` | 进度回调、加载失败原因、text/DiT/decode 计时 |
+| `MainTools` | ⋯ 菜单加「时间校准」 |
+| `Settings` | 保存位置、自动保存 |
+| `Gallery` | 保存到 SAF 文件夹 / 相册、自动保存、阶段耗时展示 |
+| `Viewer` | 下滑关闭 |
+| `ModelsActivity` | 删除确认、备份卡片、离线目录 |
+| `Tr` / `Timings` | 本改造新增：语言选择、时间学习 |
+
+另外 `assets/anima.sh` 加了「5 分钟超时 + 写 `load_error`」的补丁（v4）。
+
+> v3 及以前是「只改 smali」的二进制补丁；v4 起改成**从 fork 源码重编整类**，
+> 可读性和可维护性更好，生成路径依旧逐字节沿用上游。
+> 旧的 `build/patch_hooks.py` 仅作历史存档，v4 构建不再使用。
+
+---
+
+## 自己重新打包
+
+### 前置
+
+* JDK 17+（开发用 21，`-source 8 -target 8`）
+* `apktool` **2.11.1**（低版本会在 aapt 阶段报 `First type is not attr!`）
+* `d8`（r8.jar）、`baksmali`、Android SDK Build-Tools 的 `zipalign` + `apksigner`
+* `android-all` 14 的 stub jar（编译用，约 137 MB）
+* 上游 `HexAnima-1.9.5-v73` 的 APK（从 GrimmDev 的 Release 下载）与**同版本的 fork 源码**（`-sourcepath` 用）
+* 自己的 keystore（本仓库不含签名密钥）
+
+```bash
+# 依赖（示例：放进 /tmp）
+curl -sL https://dl.google.com/dl/android/maven2/com/android/tools/r8/8.3.37/r8-8.3.37.jar -o /tmp/r8.jar
+curl -sL https://repo1.maven.org/maven2/org/robolectric/android-all/14-robolectric-10818077/android-all-14-robolectric-10818077.jar -o /tmp/android34.jar
+# fork 源码
+curl -sL https://codeload.github.com/GrimmDev-Glitch/hexanima/tar.gz/refs/tags/v1.9.5-v73 -o /tmp/fk.tgz
+tar xzf /tmp/fk.tgz -C /tmp && mkdir -p /tmp/fork_sp/com/hexanima/npu
+cp /tmp/hexanima-1.9.5-v73/app/src/com/hexanima/npu/*.java /tmp/fork_sp/com/hexanima/npu/
+# 解码基础包
+java -jar /tmp/apktool.jar d -r -f HexAnima-1.9.5-v73.apk -o /tmp/ha_r
+```
+
+### 构建
+
+```bash
+bash build/build_v4.sh
+```
+
+脚本做七步：干净复制解码目录 → `javac`（`repo/forkmod` + `src/`）→ `d8` → `baksmali` →
+替换 12 个类的 smali（含内部类/合成 lambda）→ `apktool b` → `zipalign` + `apksigner`（v3 签名）。
+
+签名（keystore 请务必留好，丢了就只能卸载重装）：
+
+```bash
+keytool -genkeypair -keystore hexanima.jks -alias hexanima \
+        -keyalg RSA -keysize 2048 -validity 10000 -storepass 你的口令 -keypass 你的口令 -dname "CN=HexAnima Mod"
+```
+
+### 构建后自检
+
+把产物 `classes.dex` 反编译后做两项静态检查，确认没有删漏：
+
+1. 所有 `Lcom/hexanima/npu/X;` 类型引用都能找到类定义；
+2. 所有 `Lcom/hexanima/npu/X;->name:sig` 成员引用都能在 X 或其父类链中找到。
+
+然后安装，`curl http://127.0.0.1:8081/status` 确认 `version` 是本版。
+
+---
+
+## 已测试
+
+设备：realme GT5 Pro（SD 8 Gen 3 / SM8650 / Android 16），模型 `harem16`（turbo），App 在后台。
+
+| 配置 | 耗时 |
+|---|---|
+| 512×512 · 6 步 · cfg 1 · euler_a | **≈ 14 秒** |
+| 640×960 · 6 步 · cfg 4 · euler_a | ≈ 43 秒 |
+| 640×704 · 8 步 · cfg 2 · dpm++2m / exponential | ≈ 38 秒 |
+
+* 连续出图后撞温控会明显变慢甚至过曝，这是设备温控，不是接口问题。
+* 返回数据逐字节校验过：`512×512 → 786,432 字节 RGB → 1,048,576 字符 base64`。
+* 酒馆脚本 v7.6 实测可用（含 SSE 进度、图片落地、画廊）。
+* v4 的六项功能在 8 Gen 3 上逐项验证过；8 Gen 2（V73）理论上同样适用（代码层面没有设备分支）。
+
+---
+
+## 已知限制
+
+* **纯文生图**。`init_src.png` 在请求期间会被改名暂存，所以即使 App 里选了图也是 txt2img。
+* **LoRA 参数忽略**。HexAnima 的 LoRA 机制（NPU 端合并、按模型族分类）和 LocalDream 完全不同，需要单独设计。
+* **端口固定 8081**，且与 Local Dream 冲突（见上）。
+* **单任务串行**：同一时间只处理一个 `/generate`，后来的请求排队。
+* **步数上限 60**（App 界面本身也只允许 1–60）。
+* **调度器只能设 4 种**：`sgm_uniform`、`karras`、`exponential`、`discrete`。App 里另外几种只能靠"继承"生效。
+* **不自动启动**：进程被杀后需要重新打开 App。
+* **无鉴权**：见[安全提醒](#安全提醒)。
+* **安装需卸载旧版**（签名不同），模型需重新下载或提前导出备份。
+
+---
+
+## 许可证与第三方
+
+* 上游代码是 **MIT**（`Copyright (c) 2026 ayanoby`），本仓库的补丁代码（`src/`、`repo/forkmod/`、`build/`、文档）也在 MIT 下发布，见 [LICENSE](LICENSE) 与 [NOTICE.md](NOTICE.md)。
+* 模型、模型包、NPU 运行时等第三方组件的许可与上游一致；**本项目不附带任何模型文件**，模型由 App 自己下载。详见上游的 [THIRD_PARTY.md](https://github.com/GrimmDev-Glitch/hexanima/blob/main/THIRD_PARTY.md)。
+* 注意：Anima / MIAOKA 等模型是**非商用**许可（不得售卖图片），Qwen-Image 是研究许可；使用前请阅读对应模型页条款。
+
+## 免责声明
+
+非官方项目，与 ayanoby、GrimmDev-Glitch 无隶属关系。按原样提供，不保证可用性；出图内容和版权责任由使用者自负。

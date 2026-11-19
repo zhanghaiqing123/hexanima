@@ -1,0 +1,285 @@
+package com.hexanima.npu;
+
+import android.content.res.ColorStateList;
+import android.content.Context;
+import android.content.SharedPreferences;
+import android.os.Bundle;
+import android.text.InputType;
+import android.view.Gravity;
+import android.view.View;
+import android.widget.*;
+
+/** Settings: language, theme, auto-load / idle unload of the model, screen on, quality-tag prefix. Everything is stored in the "anima" prefs and applied at once. */
+public class Settings extends Base {
+    static final String DEFAULT_PREFIX = "best quality, score_7, score_9, very aesthetic, ultra detailed, high contrast, anime coloring, ";
+    /** the default up to 1.3.0 had "fair skin", which fights prompts asking for dark skin; a saved copy of that old default is upgraded */
+    static final String OLD_DEFAULT_PREFIX = "best quality, score_7, score_9, very aesthetic, ultra detailed, fair skin, high contrast, anime coloring, ";
+    static final int[] IDLE = {0, 3, 5, 10, 30};
+
+    static SharedPreferences prefs(Context c) { return c.getSharedPreferences("anima", 0); }
+    static boolean autoload(Context c) { return prefs(c).getBoolean("autoload", false); }
+    static int idleMin(Context c) { return prefs(c).getInt("idle", 10); }
+    /** low-memory mode for the Anima models (blocks are streamed from storage instead of being pinned in RAM): on by default below ~9.5 GB of RAM */
+    /** cool mode: the NPU runs at a lower clock / voltage: much less heat, ~17 % slower. "auto" (default): only while the phone is warm, "on": always, "off": never */
+    static String coolMode(Context c) { SharedPreferences p = prefs(c); return p.getString("cool_mode", p.contains("cool") && !p.getBoolean("cool", true) ? "off" : "auto"); }
+    static boolean lowRam(Context c) { return prefs(c).getBoolean("lowram", Compat.ramGb(c) < 9.5); }
+    static boolean keepOn(Context c) { return prefs(c).getBoolean("keepon", true); }
+    static boolean keepMeta(Context c) { return prefs(c).getBoolean("keep_meta", true); }
+    /** the folder picked for saved pictures (a SAF tree URI), or null = the phone gallery (Pictures/Anima); a folder whose permission is gone counts as not set */
+    static android.net.Uri pictureDir(Context c) { return dirPref(c, "pic_dir"); }
+    static android.net.Uri dirPref(Context c, String key) {
+        String v = prefs(c).getString(key, ""); if (v.isEmpty()) return null;
+        android.net.Uri u = android.net.Uri.parse(v);
+        try { for (android.content.UriPermission up : c.getContentResolver().getPersistedUriPermissions()) if (up.getUri().equals(u) && up.isWritePermission()) return u; } catch (Exception ignored) { }
+        return null;
+    }
+    static String folderLabel(android.net.Uri u) {
+        try { String id = android.provider.DocumentsContract.getTreeDocumentId(u); int i = id.indexOf(':'); String r = i >= 0 ? id.substring(i + 1) : id; return r.isEmpty() ? Tr.s(null, "Internal storage", "内部存储") : r; } catch (Exception e) { return u.getLastPathSegment(); }
+    }
+    static String pictureDirLabel(Context c) { android.net.Uri u = pictureDir(c); return u == null ? Tr.s(c, "Phone gallery (Pictures/Anima)", "手机相册 (Pictures/Anima)") : folderLabel(u); }
+    /** copy every finished picture to the save location without tapping Download */
+    static boolean autoSave(Context c) { return prefs(c).getBoolean("autosave", false); }
+    static String rawPrefix(Context c) { SharedPreferences sp = prefs(c); String p = sp.getString(key(c, "prefix"), sp.getString("prefix", DEFAULT_PREFIX));  /* per model, falling back to the old global one */ return p.equals(OLD_DEFAULT_PREFIX) ? DEFAULT_PREFIX : p; }
+    /** what goes before the prompt: trimmed, ending with a comma and a space; a single space when the user cleared it (anima.sh treats an empty PREFIX as "use the default") */
+    static String prefix(Context c) { String p = rawPrefix(c).trim(); return p.isEmpty() ? " " : (p.endsWith(",") ? p : p + ",") + " "; }
+
+    /* Sampling for Anima models (sd.cpp names). Turbo checkpoints default to 4 steps / Euler / CFG 1; regular checkpoints default to 20 / DPM++ 2M / CFG 4. CFG > 1 runs the DiT twice per step
+       and uses the negative prompt; 2nd-order samplers (heun, dpm2, dpm++2s_a, res_2s) also call it twice per step. Clip skip has no meaning here: the text encoder is Qwen3, not CLIP. */
+    static final String[] SAMPLERS = {"euler", "euler_a", "dpm++2m", "dpm++2mv2", "dpm++2m_sde", "dpm++2m_sde_bt", "er_sde", "res_multistep", "ipndm", "ipndm_v", "lcm", "ddim_trailing", "tcd", "lms",
+            "euler_cfg_pp", "euler_a_cfg_pp", "euler_ge", "heun", "dpm2", "dpm++2s_a", "res_2s"};
+    static final String[] SAMPLER_NAMES = {"Euler", "Euler a", "DPM++ 2M", "DPM++ 2M v2", "DPM++ 2M SDE", "DPM++ 2M SDE (Brownian tree)", "ER-SDE", "RES multistep", "iPNDM", "iPNDM-v", "LCM", "DDIM trailing", "TCD", "LMS",
+            "Euler CFG++", "Euler a CFG++", "Euler GE", "Heun (×2)", "DPM2 (×2)", "DPM++ 2S a (×2)", "RES 2S (×2)"};
+    static final String[] SCHEDULERS = {"discrete", "sgm_uniform", "simple", "karras", "exponential", "beta", "kl_optimal", "smoothstep", "bong_tangent"};
+    static final String[] SCHEDULER_NAMES = {"Normal (discrete)", "SGM Uniform", "Simple", "Karras", "Exponential", "Beta", "KL optimal", "Smoothstep", "Bong tangent"};
+    static String samplerName(String s) { int i = java.util.Arrays.asList(SAMPLERS).indexOf(s); return i < 0 ? s : SAMPLER_NAMES[i]; }
+    static String schedulerName(String s) { int i = java.util.Arrays.asList(SCHEDULERS).indexOf(s); return i < 0 ? s : SCHEDULER_NAMES[i]; }
+    /* The sampling fields are kept per model ("steps@<model id>", ...). Defaults: turbo models (the catalog's MiaoMiao packs, imported ones with
+       "turbo" in the name) 4 steps / Euler / CFG 1; other Anima checkpoints (base, aesthetic, fine-tunes) 20 steps, DPM++ 2M + SGM Uniform, CFG 4 and
+       Anima's usual negative prompt. */
+    static final String NEG_DEFAULT = "worst quality, low quality, score_1, score_2, score_3, blurry, jpeg artifacts, bad anatomy, bad hands, extra digits, fewer digits, watermark, signature, text";
+    static String modelId(Context c) { return prefs(c).getString("model", ""); }
+    static boolean turbo(Context c) { return new Models(c.getFilesDir()).turbo(modelId(c)); }
+    /** pref key of a sampling field for the selected model */
+    static String key(Context c, String k) { return k + "@" + modelId(c); }
+    static int steps(Context c) { return prefs(c).getInt(key(c, "steps"), turbo(c) ? 4 : 20); }
+    static String cfg(Context c) { return prefs(c).getString(key(c, "cfg"), turbo(c) ? "1" : "4"); }
+    static boolean cfgOn(Context c) { try { return Float.parseFloat(cfg(c)) > 1.001f; } catch (Exception e) { return false; } }
+    static String sampler(Context c) { return prefs(c).getString(key(c, "sampler"), turbo(c) ? "euler" : "dpm++2m"); }
+    static String scheduler(Context c) { return prefs(c).getString(key(c, "sched"), turbo(c) ? "discrete" : "sgm_uniform"); }
+    static String negative(Context c) { return prefs(c).getString(key(c, "neg"), turbo(c) ? "" : NEG_DEFAULT); }
+    static boolean twoCalls(String sampler) { return sampler.equals("heun") || sampler.equals("dpm2") || sampler.equals("dpm++2s_a") || sampler.equals("res_2s"); }
+    /** DiT calls per picture (progress estimate): CFG and 2nd-order samplers double them */
+    static int calls(Context c) { int s = steps(c); return (s + (cfgOn(c) ? cfgSteps(s, cfgCut(c)) : 0)) * (twoCalls(sampler(c)) ? 2 : 1); }
+    /** CFG only on the first cut % of the steps (100 = every step, the default): the later steps skip the negative-prompt pass. They only refine
+     *  details, so the picture stays nearly the same and those steps take half the time. */
+    // measured on Anima base, 20 steps, CFG 3.5, 3 seeds (hands + face close-up): no deformities at any cutoff; at 60 % small details go
+    // (earrings, eye sharpness), so the setting offers 100 / 80 / 70 and the comparison grid also shows 60. Time: -10 / -14 / -19 %.
+    static final int[] CFG_CUTS = {100, 80, 70, 60};
+    static final int[] CFG_CUT_CHOICES = {100, 80, 70};
+    static int cfgCut(Context c) { return prefs(c).getInt("cfg_cut", 100); }
+    static int cfgSteps(int steps, int cut) { return cut >= 100 ? steps : (int) Math.ceil(steps * cut / 100.0); }
+    static boolean defaultSampling(Context c) { return steps(c) == 4 && !cfgOn(c) && sampler(c).equals("euler") && scheduler(c).equals("discrete"); }
+
+    EditText prefixEdit, keyEdit;
+
+    @Override protected void onActivityResult(int req, int res, android.content.Intent d) {
+        super.onActivityResult(req, res, d);
+        if (req == 33 && res == RESULT_OK && d != null && d.getData() != null) {   // "where to save pictures": a folder
+            try {
+                getContentResolver().takePersistableUriPermission(d.getData(), android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION | android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+                prefs(this).edit().putString("pic_dir", d.getData().toString()).apply();
+            } catch (Exception e) { android.widget.Toast.makeText(this, String.valueOf(e.getMessage()), android.widget.Toast.LENGTH_LONG).show(); }
+            recreate();
+        }
+        if (req == 32 && res == RESULT_OK && d != null && d.getData() != null) {
+            try {   // scaled to at most 1600 px on the long side, kept as files/wallpaper.jpg (the picture itself is not touched)
+                android.graphics.Bitmap bm = android.graphics.ImageDecoder.decodeBitmap(android.graphics.ImageDecoder.createSource(getContentResolver(), d.getData()), (dec, info, src) -> {
+                    int mx = Math.max(info.getSize().getWidth(), info.getSize().getHeight()); if (mx > 1600) dec.setTargetSize(info.getSize().getWidth() * 1600 / mx, info.getSize().getHeight() * 1600 / mx);
+                    dec.setAllocator(android.graphics.ImageDecoder.ALLOCATOR_SOFTWARE);
+                });
+                try (java.io.FileOutputStream o = new java.io.FileOutputStream(wallFile(this))) { bm.compress(android.graphics.Bitmap.CompressFormat.JPEG, 90, o); }
+                wallBm = null; prefs(this).edit().putFloat("wall_zoom", 1f).putFloat("wall_x", .5f).putFloat("wall_y", .5f).putLong("wall_ts", System.currentTimeMillis()).apply();
+                startActivity(new android.content.Intent(this, WallEdit.class));   // straight to placing it; this screen is rebuilt on return
+                return;
+            } catch (Exception e) { Toast.makeText(this, L.f("Не удалось открыть картинку: %s", "Could not open the picture: %s", String.valueOf(e.getMessage())), Toast.LENGTH_LONG).show(); }
+            recreate();
+        }
+    }
+
+    /** title and the value in %, a bar under them; saved (and the screen rebuilt) when the finger lifts */
+    View slider(String title, int val, int max, java.util.function.IntConsumer cb, java.util.function.IntConsumer live) {
+        LinearLayout r = new LinearLayout(this); r.setOrientation(LinearLayout.VERTICAL); r.setPadding(dp(2), dp(10), dp(2), dp(6));
+        LinearLayout t = new LinearLayout(this); t.setGravity(Gravity.CENTER_VERTICAL); t.addView(text(title, 15, TXT, true), new LinearLayout.LayoutParams(0, -2, 1));
+        final TextView vt = text(val + " %", 14, DIM, false); t.addView(vt); r.addView(t);
+        SeekBar sb = new SeekBar(this); sb.setMax(max); sb.setProgress(val); sb.setProgressTintList(ColorStateList.valueOf(ACC)); sb.setThumbTintList(ColorStateList.valueOf(ACC));
+        sb.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            public void onProgressChanged(SeekBar b, int v, boolean user) { vt.setText(v + " %"); if (user && live != null) live.accept(v); }
+            public void onStartTrackingTouch(SeekBar b) { }
+            public void onStopTrackingTouch(SeekBar b) { cb.accept(b.getProgress()); recreate(); }
+        });
+        r.addView(sb, new LinearLayout.LayoutParams(-1, dp(36)));
+        return r;
+    }
+
+    @Override protected void onCreate(Bundle b) {
+        super.onCreate(b);
+        LinearLayout col = screen(L.s("Настройки", "Settings"), null);
+        SharedPreferences p = prefs(this);
+
+        LinearLayout c1 = card(col);
+        c1.addView(choice(L.s("Язык", "Language"), L.NAMES[L.index()], v -> {
+            builder().setTitle(L.s("Язык", "Language")).setSingleChoiceItems(L.NAMES, L.index(), (d, i) -> { d.dismiss(); L.set(this, L.CODES[i]); recreate(); }).show();
+        }));
+        String[] tn = {L.s("Как в системе", "Follow system"), L.s("Светлая", "Light"), L.s("Тёмная", "Dark")}, tv = {"system", "light", "dark"};
+        int ti = java.util.Arrays.asList(tv).indexOf(p.getString("theme", "system"));
+        c1.addView(choice(L.s("Тема", "Theme"), tn[Math.max(ti, 0)], v -> {
+            builder().setTitle(L.s("Тема", "Theme")).setSingleChoiceItems(tn, Math.max(ti, 0), (d, i) -> { d.dismiss(); p.edit().putString("theme", tv[i]).apply(); recreate(); }).show();
+        }));
+        // own wallpaper behind every screen; the blocks turn see-through so it shows
+        c1.addView(choice(L.s("Обои", "Wallpaper"), hasWall(this) ? L.s("Свои", "Own") : L.s("Нет", "None"), v -> {
+            final boolean has = hasWall(this);
+            builder().setTitle(L.s("Обои", "Wallpaper")).setItems(has ? new String[]{L.s("Выбрать картинку…", "Choose a picture…"), L.s("Положение и масштаб", "Position and scale"), L.s("Убрать обои", "Remove the wallpaper")} : new String[]{L.s("Выбрать картинку…", "Choose a picture…")}, (d, i) -> {
+                if (i == 0) startActivityForResult(new android.content.Intent(android.content.Intent.ACTION_OPEN_DOCUMENT).setType("image/*").addCategory(android.content.Intent.CATEGORY_OPENABLE), 32);
+                else if (i == 1) startActivity(new android.content.Intent(this, WallEdit.class));
+                else { wallFile(this).delete(); wallBm = null; p.edit().putLong("wall_ts", 0).apply(); recreate(); }
+            }).show();
+        }));
+        if (hasWall(this)) {
+            c1.addView(slider(L.s("Прозрачность блоков", "Block transparency"), cardTrans(this), 90, v -> p.edit().putInt("card_trans", v).apply(), null));
+            c1.addView(slider(L.s("Затемнение обоев", "Wallpaper dimming"), wallDim(this), 80, v -> p.edit().putInt("wall_dim", v).apply(), v -> { dimNow = v; ((android.view.ViewGroup) findViewById(android.R.id.content)).getChildAt(0).invalidate(); }));
+        }
+
+        LinearLayout c2 = card(col);
+        c2.addView(toggle(L.s("Загружать модель при запуске", "Load the model at start"), L.s("Первая картинка появится быстрее, но модель занимает ОЗУ", "The first picture is faster, but the model holds RAM"), autoload(this), on -> p.edit().putBoolean("autoload", on).apply()));
+        String[] in = new String[IDLE.length];
+        for (int i = 0; i < IDLE.length; i++) in[i] = IDLE[i] == 0 ? L.s("Никогда", "Never") : L.f("%d мин", "%d min", IDLE[i]);
+        int ii = Math.max(0, java.util.Arrays.binarySearch(IDLE, idleMin(this)));
+        c2.addView(choice(L.s("Выгружать при простое", "Unload when idle"), in[ii], v -> {
+            builder().setTitle(L.s("Выгружать при простое", "Unload when idle")).setSingleChoiceItems(in, ii, (d, i) -> { d.dismiss(); p.edit().putInt("idle", IDLE[i]).apply(); recreate(); }).show();
+        }));
+        TextView idleNote = text(L.s("Освобождает ОЗУ, если вы долго ничего не генерируете", "Frees RAM when you have not generated anything for a while"), 12, DIM, false); idleNote.setPadding(dp(2), 0, 0, dp(4));
+        c2.addView(idleNote);
+        c2.addView(choice(L.s("Almacenamiento", "Storage"), L.f("%s libres", "%s free", StorageActivity.gb(getFilesDir().getUsableSpace())), v -> startActivity(new android.content.Intent(this, StorageActivity.class))));
+        c2.addView(choice(L.s("Exportar registros", "Export logs"), "ZIP", v -> exportLogs()));
+        TextView logNote = text(L.s("Guarda en Descargas/HexAnima un ZIP con los registros de los modelos y los datos del teléfono, para reportar un fallo. No incluye imágenes, prompts guardados ni tu clave de Civitai.", "Saves to Downloads/HexAnima a ZIP with the model logs and the phone's details, to report a problem. It holds no pictures, saved prompts or your Civitai key."), 12, DIM, false);
+        logNote.setPadding(dp(2), 0, 0, dp(4)); c2.addView(logNote);
+
+        String ver = "?"; try { ver = getPackageManager().getPackageInfo(getPackageName(), 0).versionName; } catch (Exception ignored) { }
+        c2.addView(choice("GitHub", L.f("Versión %s", "Version %s", ver), v -> startActivity(new android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse("https://github.com/GrimmDev-Glitch/hexanima")))));
+        TextView ghNote = text(L.s("GrimmDev-Glitch/hexanima: novedades, descargas y reportes. El proyecto original es ayanoby/hexanima.", "GrimmDev-Glitch/hexanima: news, downloads and reports. The original project is ayanoby/hexanima."), 12, DIM, false);
+        ghNote.setPadding(dp(2), 0, 0, dp(4)); c2.addView(ghNote);
+        LinearLayout c3 = card(col);
+        c3.addView(toggle(L.s("Не гасить экран при генерации", "Keep the screen on while generating"), "", keepOn(this), on -> p.edit().putBoolean("keepon", on).apply()));
+        c3.addView(toggle(L.s("Guardar metadatos en la imagen", "Keep metadata in the picture"), L.s("Prompt, semilla y modelo dentro del PNG. Desactivado, el PNG no los lleva; el historial de la app guarda su propia copia.", "Prompt, seed and model inside the PNG. Off, the PNG carries none of them; the app's History keeps its own copy."), keepMeta(this), on -> { p.edit().putBoolean("keep_meta", on).apply(); PngMeta.keep = on; }));
+        // localapi: where the pictures and videos are saved, and whether they go there by themselves after a run
+        c3.addView(choice(Tr.s(this, "Where pictures are saved", "图片保存位置"), pictureDirLabel(this), v -> builder().setTitle(Tr.s(this, "Where pictures are saved", "图片保存位置"))
+            .setSingleChoiceItems(new String[]{Tr.s(this, "Phone gallery (Pictures/Anima)", "手机相册 (Pictures/Anima)"), Tr.s(this, "Choose a folder…", "选择文件夹…")}, pictureDir(this) == null ? 0 : 1, (d, i) -> {
+                d.dismiss();
+                if (i == 0) { p.edit().remove("pic_dir").apply(); recreate(); }
+                else startActivityForResult(new android.content.Intent(android.content.Intent.ACTION_OPEN_DOCUMENT_TREE)
+                        .addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION | android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                                | android.content.Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION | android.content.Intent.FLAG_GRANT_PREFIX_URI_PERMISSION), 33);
+            }).show()));
+        c3.addView(toggle(Tr.s(this, "Save right after generating", "生成后自动保存"), Tr.s(this,
+                "Every finished picture is copied to the place chosen above by itself, without tapping Download. It stays in the app gallery either way.",
+                "每张生成完的图片都会自动复制到上面选的位置，不需要再按“下载”。应用内历史里始终保留一份。"), autoSave(this), on -> p.edit().putBoolean("autosave", on).apply()));
+        String[] cn0 = {L.s("Автоматически", "Automatic"), L.s("Всегда", "Always"), L.s("Никогда", "Never")}, cv0 = {"auto", "on", "off"};
+        int ci0 = Math.max(0, java.util.Arrays.asList(cv0).indexOf(coolMode(this)));
+        c3.addView(choice(L.s("Режим без перегрева", "Cool mode"), cn0[ci0], v -> {
+            builder().setTitle(L.s("Режим без перегрева", "Cool mode")).setSingleChoiceItems(cn0, ci0, (d, i) -> { d.dismiss(); p.edit().putString("cool_mode", cv0[i]).apply(); recreate(); }).show();
+        }));
+        TextView coolNote = text(L.s("NPU работает на меньшей частоте: телефон греется намного меньше, картинка ~17 % дольше. «Автоматически»: полная скорость, пока телефон холодный, и меньшая частота, когда он нагревается.",
+                "The NPU runs at a lower clock: the phone gets much less hot, a picture takes ~17 % longer. Automatic: full speed while the phone is cool, the lower clock once it gets warm."), 12, DIM, false);
+        coolNote.setPadding(dp(2), 0, 0, dp(4)); c3.addView(coolNote);
+        c3.addView(toggle(L.s("Экономия памяти (медленнее)", "Low-memory mode (slower)"), L.s("Веса модели читаются с накопителя при каждой картинке, а не держатся в ОЗУ. Нужно телефонам с 8 ГБ ОЗУ, на 12 ГБ не нужно.", "The model's weights are read from storage for every picture instead of staying in RAM. Needed on phones with 8 GB of RAM, not on 12 GB."), lowRam(this), on -> p.edit().putBoolean("lowram", on).apply()));   // MOSS-Image takes plain sentences: the quality-tag prefix is for the Anima models only, so the setting is hidden while MOSS is selected
+
+        LinearLayout cc = card(col);
+        TextView ct = text(L.s("Ключ API Civitai", "Civitai API key"), 15, TXT, true); ct.setPadding(dp(2), dp(6), 0, dp(2)); cc.addView(ct);
+        TextView cn = text(L.s("Для +18 и файлов «только после входа». civitai.com → аккаунт → API Keys. Хранится только на телефоне и отправляется только на civitai.com.",
+                "For +18 and \"login required\" files. civitai.com → Account settings → API Keys. It stays on this phone and is only sent to civitai.com."), 12, DIM, false);
+        cn.setPadding(dp(2), 0, 0, dp(6)); cc.addView(cn);
+        keyEdit = field("…"); keyEdit.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD); keyEdit.setText(p.getString("civitai_key", "")); keyEdit.setTextSize(14);
+        cc.addView(keyEdit);
+        if (Moss.is(p.getString("model", "")) || Qwen.is(p.getString("model", ""))) return;   // MOSS-Image takes plain sentences: the quality-tag prefix is for the Anima models only, so the setting is hidden while MOSS is selected
+        TextView pl = text(L.s("Etiquetas de calidad antes del prompt (este modelo Anima)", "Quality tags before the prompt (this Anima model)"), 15, TXT, true); pl.setPadding(dp(2), dp(14), 0, dp(6)); c3.addView(pl);
+        prefixEdit = field("");
+        prefixEdit.setText(rawPrefix(this)); prefixEdit.setTextSize(13); prefixEdit.setMinLines(2); prefixEdit.setGravity(Gravity.TOP);
+        prefixEdit.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
+        c3.addView(prefixEdit);
+        Button reset = button(L.s("Сбросить по умолчанию", "Reset to default"), FIELD, ACC); reset.setTextSize(13);
+        reset.setOnClickListener(v -> prefixEdit.setText(DEFAULT_PREFIX));
+        LinearLayout.LayoutParams rl = new LinearLayout.LayoutParams(-2, dp(38)); rl.topMargin = dp(8);
+        c3.addView(reset, rl);
+    }
+
+    @Override protected void onPause() {
+        super.onPause();
+        if (prefixEdit != null) prefs(this).edit().putString(key(this, "prefix"), prefixEdit.getText().toString()).apply();
+        if (keyEdit != null) prefs(this).edit().putString("civitai_key", keyEdit.getText().toString().trim()).apply();
+    }
+
+    View choice(String title, String value, View.OnClickListener l) {
+        LinearLayout r = new LinearLayout(this); r.setGravity(Gravity.CENTER_VERTICAL); r.setPadding(dp(2), dp(12), dp(2), dp(12));
+        r.addView(text(title, 15, TXT, true), new LinearLayout.LayoutParams(0, -2, 1));
+        r.addView(text(value + "  ▾", 14, ACC, false));
+        r.setOnClickListener(l);
+        return r;
+    }
+
+    interface OnToggle { void on(boolean v); }
+
+    View toggle(String title, String sub, boolean on, OnToggle cb) {
+        LinearLayout r = new LinearLayout(this); r.setGravity(Gravity.CENTER_VERTICAL); r.setPadding(dp(2), dp(10), dp(2), dp(10));
+        LinearLayout t = new LinearLayout(this); t.setOrientation(LinearLayout.VERTICAL);
+        t.addView(text(title, 15, TXT, true));
+        if (!sub.isEmpty()) { TextView s = text(sub, 12, DIM, false); s.setPadding(0, dp(2), 0, 0); t.addView(s); }
+        r.addView(t, new LinearLayout.LayoutParams(0, -2, 1));
+        Switch sw = new Switch(this); sw.setChecked(on);
+        sw.setThumbTintList(new ColorStateList(new int[][]{{android.R.attr.state_checked}, {}}, new int[]{ACC, DIM}));
+        sw.setTrackTintList(new ColorStateList(new int[][]{{android.R.attr.state_checked}, {}}, new int[]{(ACC & 0x00FFFFFF) | 0x66000000, (DIM & 0x00FFFFFF) | 0x44000000}));
+        sw.setOnCheckedChangeListener((v, c) -> cb.on(c));
+        r.addView(sw);
+        r.setOnClickListener(v -> sw.toggle());
+        return r;
+    }
+
+    /** ZIP of every *.log under the app's files (models, server, runners) plus device.txt, written to Download/HexAnima */
+    void exportLogs() {
+        final String fn = "HexAnima_logs_" + new java.text.SimpleDateFormat("yyyyMMdd_HHmm", java.util.Locale.US).format(new java.util.Date()) + ".zip";
+        new Thread(() -> {
+            String msg;
+            try {
+                android.content.ContentValues cv = new android.content.ContentValues();
+                cv.put(android.provider.MediaStore.Downloads.DISPLAY_NAME, fn); cv.put(android.provider.MediaStore.Downloads.MIME_TYPE, "application/zip");
+                cv.put(android.provider.MediaStore.Downloads.RELATIVE_PATH, "Download/HexAnima");
+                android.net.Uri u = getContentResolver().insert(android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv);
+                int n = 0;
+                try (java.util.zip.ZipOutputStream z = new java.util.zip.ZipOutputStream(new java.io.BufferedOutputStream(getContentResolver().openOutputStream(u)))) {
+                    StringBuilder d = new StringBuilder();
+                    String ver = "?"; try { ver = getPackageManager().getPackageInfo(getPackageName(), 0).versionName; } catch (Exception ignored) { }
+                    android.app.ActivityManager.MemoryInfo mi = new android.app.ActivityManager.MemoryInfo(); ((android.app.ActivityManager) getSystemService(ACTIVITY_SERVICE)).getMemoryInfo(mi);
+                    android.content.Intent b = registerReceiver(null, new android.content.IntentFilter(android.content.Intent.ACTION_BATTERY_CHANGED));
+                    d.append("HexAnima ").append(ver).append('\n').append("device: ").append(android.os.Build.MANUFACTURER).append(' ').append(android.os.Build.MODEL).append('\n')
+                     .append("soc: ").append(Compat.soc()).append('\n').append("android: ").append(android.os.Build.VERSION.RELEASE).append(" (sdk ").append(android.os.Build.VERSION.SDK_INT).append(")\n")
+                     .append(String.format(java.util.Locale.US, "ram: %.1f GB total, %.1f GB free%n", mi.totalMem / 1073741824.0, mi.availMem / 1073741824.0))
+                     .append("storage free: ").append(StorageActivity.gb(getFilesDir().getUsableSpace())).append('\n')
+                     .append("battery: ").append(b == null ? "?" : b.getIntExtra("temperature", 0) / 10f + " C").append('\n')
+                     .append("thermal status: ").append(((android.os.PowerManager) getSystemService(POWER_SERVICE)).getCurrentThermalStatus()).append('\n')
+                     .append("language: ").append(L.lang).append(", cool mode: ").append(coolMode(this)).append('\n');
+                    z.putNextEntry(new java.util.zip.ZipEntry("device.txt")); z.write(d.toString().getBytes("UTF-8")); z.closeEntry();
+                    java.util.ArrayDeque<java.io.File[]> todo = new java.util.ArrayDeque<>(); todo.add(new java.io.File[]{getFilesDir()});
+                    byte[] buf = new byte[1 << 16]; String root = getFilesDir().getPath() + "/";
+                    while (!todo.isEmpty()) for (java.io.File f : todo.poll()) {
+                        if (f.isDirectory()) { if (!f.getName().equals("gallery") && f.getPath().split("/").length - root.split("/").length < 3) { java.io.File[] k = f.listFiles(); if (k != null) todo.add(k); } continue; }
+                        if (!f.getName().endsWith(".log") || f.length() > (32L << 20)) continue;
+                        z.putNextEntry(new java.util.zip.ZipEntry(f.getPath().replace(root, "")));
+                        try (java.io.InputStream in = new java.io.FileInputStream(f)) { for (int r; (r = in.read(buf)) > 0; ) z.write(buf, 0, r); }
+                        z.closeEntry(); n++;
+                    }
+                }
+                msg = L.f("Guardado en Descargas/HexAnima/%s (%d registros)", "Saved to Downloads/HexAnima/%s (%d logs)", fn, n);
+            } catch (Exception e) { msg = L.f("No se pudo exportar: %s", "Could not export: %s", String.valueOf(e.getMessage())); }
+            final String m = msg; runOnUiThread(() -> android.widget.Toast.makeText(this, m, android.widget.Toast.LENGTH_LONG).show());
+        }).start();
+    }
+}

@@ -1,3 +1,7 @@
+> **本仓库是 [ayanoby/hexanima](https://github.com/ayanoby/hexanima) 的 fork。**
+> Snapdragon 8 Gen 2 / Hexagon V73 的移植与相关功能来自 [GrimmDev-Glitch/hexanima](https://github.com/GrimmDev-Glitch/hexanima)。
+> 发布 APK 与上游 `1.9.5-v73` 的差异（classes.dex 重编、assets/anima.sh 加载超时补丁）见 [NOTICE.md](NOTICE.md)。
+
 # Third-party components
 
 This repository contains only HexAnima's own source code (MIT, see `LICENSE`). Nothing below is stored here.

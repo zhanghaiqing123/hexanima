@@ -1,43 +1,13 @@
-# build outputs
-app/out/
-app/jnilibs/
-app/*.apk
-app/*.idsig
-phone/animad
-chainrun/chainrun
-chainrun/terun
-chainrun/vaerun
-hexagon/mega/out/
-hexagon/mega/out_arm/
-# Qualcomm proprietary files, never commit
-hexagon/mega/qhl_hmx/
-hexagon/mega/syslib/
-**/libQnn*.so
-# model packs and local data
-pack/
-work/
-*.bin
-*.safetensors
-__pycache__/
-app/assets/anima.sh
-android/build/
-!app/assets/preview_*.bin
-phone/animaconv
-# build outputs of the model trees (generated sources, binaries, SDK files)
-flux3/hexagon/mega/out/
-flux3/hexagon/mega/bld/
-flux3/hexagon/mega/qhl_hmx/
-flux3/hexagon/mega/syslib/
-flux3/runner/out/
-flux3/runner/flux3run.cpp
-ltx/runner/out/
-ltx/runner/ltxrun.cpp
-ltx/vae/runner/out/
-h3/hexagon/mega/out/
-h3/hexagon/mega/out_arm/
-h3/vae/out/
-mage/magerun/out/
+# 构建中间产物 / 本地产物，不要提交
+*.apk
+*.apk.1
+*.dex
+*.jks
+*.keystore
+/dist/
+/keystore/
 
-# built research binaries (the app ships them as jnilibs, from tools/stage_jnilibs.sh)
-seedvr2/svsr_s
-hexagon/mega/out_hyb/
+# IDE / OS
+.DS_Store
+.idea/
+*.iml
