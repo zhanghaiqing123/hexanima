@@ -47,6 +47,7 @@ ayanoby/hexanima                 原版：NPU 内核、模型包、App 本体（
 | v2 | `HexAnima-1.9.5-v73-localapi-v2.apk` | `1.9.5-v73+api3` | 8081 接口 + 参数继承 |
 | v3 | `HexAnima-1.9.5-v73-localapi-v3.apk` | `1.9.5-v73+api3d` | 模型导出/导入、离线目录、检查点文件夹转换、模型页 MODEL BACKUP 卡片 |
 | v4 | `HexAnima-1.9.5-v73-localapi-v4.apk` | `1.9.5-v73+api4` | 上游 1.8.3 六项功能 + 备份界面中英双语 |
+| v5 | `HexAnima-1.9.5-v73-localapi-v5.apk` | `1.9.5-v73+api5` | 修复本地 `.safetensors` 转换识别 + 转换界面中文化 |
 
 逐版本细节见 [CHANGES.md](CHANGES.md)。
 
@@ -227,7 +228,7 @@ data: {"type":"error","message":"..."}
 
 ---
 
-## 新增功能（v1 → v4）
+## 新增功能（v1 → v5）
 
 ### v1 · 本地接口
 8081 HTTP/SSE；反射驱动 App 自己的生成流程（同一套 UI 管线、同一份设置）。
@@ -240,7 +241,7 @@ data: {"type":"error","message":"..."}
 * 单个/全部**导出**到自选文件夹（SAF）或一键 `Download/HexAnimaBackup`；
 * **导入**文件夹（校验 `size + sha256`，用 `hdr.bin` 重建 stub）；
 * **离线目录**（`files/catalog.cache`，断网也能看/删模型）；
-* **文件夹批量 `.safetensors` 转换**（`libanimaconv.so`，免复制、读 header 判断 2B/2.9B）。
+* **文件夹批量 `.safetensors` 转换**（`libanimaconv.so`，免复制、读 header 判断 2B/2.9B；识别规则在 v5 修正）。
 
 ### v4 · 同步上游 1.8.3 六项功能 + 中文化
 1. **图片保存位置 + 生成后自动保存**（设置页；手机相册或任意文件夹，SAF 持久授权）；
@@ -251,6 +252,18 @@ data: {"type":"error","message":"..."}
 6. **批量张数修复**（生成中改张数只影响下一次）。
 
 另外：模型备份卡片与弹窗中英双语，默认跟随手机语言，弹窗底部可切换。
+
+### v5 · 本地检查点转换修复 + 中文化
+v3/v4 的转换界面会把**任何**文件都判成 “not an Anima DiT”（连官方纯主干都不行），原因是识别用的张量写错了：
+找的是「不在 `blocks.` 下的 `self_attn.q_proj.weight`」，而 Anima DiT 根本没有这种全局张量。
+
+* 识别规则按 `libanimaconv.so` 重写：找 `(任意前缀)blocks.0.self_attn.q_proj.weight`、要求形状 `[2048, 2048]`，
+  再用最大的 `blocks.N` 判 28（2B）/ 40（2.9B）；带 VAE / 文本编码器的打包版同样能认。
+* 转换输出改 **q8**（块 83,365,888 B，28 块 + `small.bin` ≈ 2.6 GB，与目录里下载的 2B 模型同规格），
+  所需空间按 `83,365,888 × 块数 + 310 MB` 估算。
+* 转换出的模型目录补写 `hdr.bin`（源文件的 safetensors 头），stub 由它生成，导出/再导入可以重建；
+  另加 `.custom` 标记，并在转换前检查基础文件（文本编码器 / VAE）是否已下载——否则模型会“转完看不见”。
+* 转换列表、进度、失败原因（缺 adaln / dtype 不支持 / 目录提供方不给真实文件…）全部中英双语。
 
 ---
 
@@ -313,7 +326,7 @@ java -jar /tmp/apktool.jar d -r -f HexAnima-1.9.5-v73.apk -o /tmp/ha_r
 ### 构建
 
 ```bash
-bash build/build_v4.sh
+bash build/build_v5.sh
 ```
 
 脚本做七步：干净复制解码目录 → `javac`（`repo/forkmod` + `src/`）→ `d8` → `baksmali` →

@@ -5,9 +5,28 @@
 
 | 版本 | 服务版本 | APK | sha256（完整） |
 |---|---|---|---|
+| v5 | `1.9.5-v73+api5` | `HexAnima-1.9.5-v73-localapi-v5.apk` | `892c8e35af9b44fc2f82ed9b7ad2d01008a3d8365a11e4d7002f149d8a1402f4` |
 | v4 | `1.9.5-v73+api4` | `HexAnima-1.9.5-v73-localapi-v4.apk` | `7626cb8ba45d8e4601e3987ea17eee11f9a5f46e9f1a99036c0ce7fb8c84f907` |
 | v3 | `1.9.5-v73+api3d` | `HexAnima-1.9.5-v73-localapi-v3.apk` | `d1ead0a46cbafda39a25930b4bccdebf237d15559898f9ce34a111de04063297` |
 | v2 | `1.9.5-v73+api3` | `HexAnima-1.9.5-v73-localapi-v2.apk` | `56304bb73c9959c65af37c59e512e818dfc84edc074f7b1bce3dc567fc91c3d7` |
+
+---
+
+## v5 — 2026-11-19
+
+修复本地 `.safetensors` 转换，并把转换界面做成中英双语。
+
+* **识别规则按 `libanimaconv.so` 重写**。v3/v4 找的是「不在 `blocks.` 下的 `self_attn.q_proj.weight`」，
+  而 Anima DiT 没有这种全局张量，于是纯主干、带 VAE/文本编码器的打包版**全部**被判成 “not an Anima DiT”。
+  现在找 `(任意前缀)blocks.0.self_attn.q_proj.weight`、要求 `[2048, 2048]`，再用最大的 `blocks.N` 判 28 / 40 块，
+  与转换器本身的判定一致。实测 4.18 GB 的 `oneObsessionAnima_v50`（前缀 `model.diffusion_model.`、F16、28 块）识别正常。
+* **输出改 q8**：块 83,365,888 B，28 块 + `small.bin` ≈ 2.6 GB，与目录下载的 2B 模型同规格；
+  所需空间按 `83,365,888 × 块数 + 310 MB` 估算。
+* **补写 `hdr.bin`**（源文件的 safetensors 头），stub 由它生成，模型备份导出/再导入才能重建 stub；
+  新增 `.custom` 标记；转换前检查基础文件（文本编码器 / VAE）是否已下载，避免“转完在列表里看不见”。
+* **中文化**：转换列表、进度、失败原因、转换器报错（缺 adaln / dtype 不支持 / 目录提供方不给真实文件…）全部中英双语。
+
+安装：与 v2–v4 同签名，可覆盖安装。
 
 ---
 

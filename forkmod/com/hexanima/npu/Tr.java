@@ -10,6 +10,7 @@ final class Tr {
             android.content.SharedPreferences p = c.getSharedPreferences("anima", 0);
             if (p.contains("ui_zh")) return p.getBoolean("ui_zh", true);
         } catch (Throwable ignored) { }
+        try { if ("zh".equals(L.lang)) return true; } catch (Throwable ignored) { }   // the app's own language picker
         try { return java.util.Locale.getDefault().getLanguage().startsWith("zh"); } catch (Throwable t) { return false; }
     }
     static void set(Context c, boolean v) { c.getSharedPreferences("anima", 0).edit().putBoolean("ui_zh", v).apply(); }
