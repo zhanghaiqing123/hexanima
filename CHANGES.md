@@ -5,7 +5,7 @@
 
 | 版本 | 服务版本 | APK | sha256（完整） |
 |---|---|---|---|
-| v11 | `1.9.5-v73+api11` | `HexAnima-1.9.5-v73-localapi-v11.apk` | `5264283e5fc7a1da916e532b16dec2a4ece5bb3c143efcc5f3b0299aadcfc62d` |
+| v11 | `1.9.5-v73+api11` | `HexAnima-1.9.5-v73-localapi-v11.apk` | `2186fd4cc93d2382ce8e5ef3828d7cbab7ce0818d5969a058e0071cad4f88c48` |
 | v10 | `1.9.5-v73+api10` | `HexAnima-1.9.5-v73-localapi-v10.apk` | `2d27d665bd3eacfef48a3cd3f545e6de88e1e088c10bef4fa2a07edfc0a27fba` |
 | v9 | `1.9.5-v73+api9` | `HexAnima-1.9.5-v73-localapi-v9.apk` | `9bf2fc16650bb6abf2292eda1f17fbf1ae1e7cc968c4bcb27bb7b07bee448e7f` |
 | v8 | `1.9.5-v73+api8` | `HexAnima-1.9.5-v73-localapi-v8.apk` | `f5df10dc31b3db2b51af3999a5c6f90442179920ebbd9438a2acd7f03a3fa8fb` |
@@ -29,6 +29,8 @@
 | 国内镜像 · hf-mirror（默认） | `https://hf-mirror.com/ayanoby/anima-npu-packs/resolve/main/` |
 | 官方 · huggingface.co | `https://huggingface.co/ayanoby/anima-npu-packs/resolve/main/` |
 | 自定义地址 | 任意 `…/resolve/main/` 目录 |
+
+升级迁移：v9/v10 在打开模型页时会把当时的默认地址写回 `base` 偏好（即 huggingface.co）。v11 首次运行会把**正好等于**该官方默认值的 `base` 改回 hf-mirror（用户自己填过的地址不动），标记 `base_migrated_v11`。
 
 同时修回一个 v9/v10 的隐性回归：重编译 `MainTools` 时 `DEFAULT_BASE` 被带成了上游源码里的 `huggingface.co`，国内会拖慢/卡住目录加载；v11 起默认回到 `hf-mirror.com`。`MainRun` 的 ADetailer 检测器地址也改回 hf-mirror，转换本地检查点时的公共文件下载同样跟随「下载源」设置。
 

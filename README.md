@@ -277,6 +277,7 @@ v3/v4 的转换界面会把**任何**文件都判成 “not an Anima DiT”（�
 * 模型选择器里，自己转换/导入的模型（`meta.json` 带 `"imported": true`）右侧多了 🗑：确认后如果是当前模型就先停服务器，再删 `files/anima/m_<id>/` 与 `files/sd/<id>.safetensors`，并清掉自定义名。
 * 模型页「Источник / Source」= 国内镜像 `hf-mirror`（默认）/ 官方 `huggingface.co` / 自定义 `…/resolve/main/` 地址。
 * 修回 v9/v10 的隐性回归：重编译 `MainTools` 把 `DEFAULT_BASE` 带成了上游源码的 `huggingface.co`，国内会拖慢目录加载；v11 起默认 `hf-mirror.com`，ADetailer 检测器地址与检查点转换的公共文件下载也跟随该设置。
+* 升级迁移：v9/v10 打开模型页时会把当时默认的官方地址写回 `base`；v11 首次运行把**正好等于**该官方默认值的地址改回 hf-mirror（自己填过的不动），标记 `base_migrated_v11`。
 
 ### v10 · 温控交还系统 + SoC 温度 + 8 Elite
 * **不再由 App 暂停或降温**：删掉电池温度阈值滑杆、「太热也先出一张」开关、`waitCool()` 冷却等待、高温通知、队列/校准的热门禁，以及跑完后那句「已暂停：手机过热，请让其冷却」——它原本是出图完成之后又查了一次温度，属于误报。系统热等级提示保留，只提示不拦人。

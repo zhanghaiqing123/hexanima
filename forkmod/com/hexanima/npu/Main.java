@@ -1536,7 +1536,18 @@ public class Main extends MainEdit {
             } catch (IOException e) { Toast.makeText(this, nm + ": " + e, Toast.LENGTH_LONG).show(); }
     }
 
+    /** mod: v9/v10 persisted the official huggingface URL as the catalog default (the Models screen saved it back on every open); v11
+     *  defaults to hf-mirror, so that one exact value is switched over once. A URL the user typed is left alone. */
+    static void migrateBase(SharedPreferences p) {
+        if (p.getBoolean("base_migrated_v11", false)) return;
+        String b = p.getString("base", "");
+        if (b.equals("https://huggingface.co/ayanoby/anima-npu-packs/resolve/main/") || b.equals("https://huggingface.co/ayanoby/anima-npu-packs/resolve/main"))
+            p.edit().putString("base", MainTools.DEFAULT_BASE).apply();
+        p.edit().putBoolean("base_migrated_v11", true).apply();
+    }
+
     void refreshModels() {
+        migrateBase(prefs());
         ids = store.installed();
         String was = prefs().getString("model", "");
         model = ids.isEmpty() ? "" : ids.contains(model) ? model : "";
