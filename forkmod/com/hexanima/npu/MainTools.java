@@ -567,56 +567,50 @@ abstract class MainTools extends MainRun {
     long availMb() { ActivityManager.MemoryInfo mi = new ActivityManager.MemoryInfo(); ((ActivityManager) getSystemService(ACTIVITY_SERVICE)).getMemoryInfo(mi); return mi.availMem / 1048576; }
     /** battery temperature in °C (Xiaomi phones report thermal status 0 even with the CPU at 80+ °C; the battery sensor is what an app can read) */
     float batteryC() { Intent b = registerReceiver(null, new IntentFilter(Intent.ACTION_BATTERY_CHANGED)); return b == null ? 0 : b.getIntExtra("temperature", 0) / 10f; }
-    /** plugged in: charging warms the battery by itself (~42 °C at rest over USB), so the battery limits are 3 °C higher */
-    boolean charging() { Intent b = registerReceiver(null, new IntentFilter(Intent.ACTION_BATTERY_CHANGED)); return b != null && b.getIntExtra("plugged", 0) != 0; }
-    /** mod: the threshold from Settings (35-55 °C, default 45); charging adds 3 °C, the charger itself warms the battery */
-    float hotC() { return charging() ? Settings.tempLimit(this) + 3f : Settings.tempLimit(this); }
-    boolean tooHot() {
-        PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
-        if (pm.getCurrentThermalStatus() >= PowerManager.THERMAL_STATUS_SEVERE) return true;
-        if (android.os.Build.VERSION.SDK_INT >= 30) { float hr = pm.getThermalHeadroom(0); if (!Float.isNaN(hr) && hr >= 0.95f) return true; }
-        return batteryC() >= hotC();
+    /** mod: "  ·  Battery 34.3 °C  ·  SoC 61 °C" for the RAM strip. The battery comes from BatteryManager; the chip is the hottest CPU / GPU / NPU
+     *  thermal zone, read from /sys/class/thermal (no public API). SELinux lets an app read sysfs_thermal here; where it does not, that part is skipped. */
+    String tempLabel() {
+        float b = batteryC(), c = socC();
+        StringBuilder s = new StringBuilder();
+        if (b > 0) s.append(String.format(java.util.Locale.US, "  ·  %s %.1f \u00b0C", Tr.s(this, "Battery", "电池"), b));
+        if (c > 0) s.append(String.format(java.util.Locale.US, "  ·  SoC %.0f \u00b0C", c));
+        return s.toString();
     }
-    /** "  ·  37.5 °C" (battery) for the RAM strip; the battery sensor is the one an app can read on every phone */
-    String tempLabel() { float c = batteryC(); return c > 0 ? String.format(java.util.Locale.US, "  ·  %.1f °C", c) : ""; }
-    /** notification when a batch pauses to let the phone cool down (the user may have left the app) */
-    void notifyCooling(float c) {
-        try {
-            NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
-            nm.createNotificationChannel(new NotificationChannel("heat", L.s("Pausa por calor", "Heat pause"), NotificationManager.IMPORTANCE_DEFAULT));
-            Notification.Builder nb = new Notification.Builder(this, "heat").setSmallIcon(android.R.drawable.stat_sys_warning).setAutoCancel(true)
-                .setContentTitle(L.s("Tanda en pausa: el teléfono está caliente", "Batch paused: the phone is hot"))
-                .setContentText(L.f("Batería a %.1f °C. Seguirá sola cuando se enfríe.", "Battery at %.1f °C. It goes on by itself once it cools down.", c))
-                .setContentIntent(PendingIntent.getActivity(this, 0, new Intent(this, Main.class).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP), PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT));
-            nm.notify(3, nb.build());
-        } catch (Exception ignored) { }
-    }
-    /** Between pictures, keep the batch paused until the phone has cooled or the user presses Stop. */
-    boolean waitCool(long t0) {
-        long since = System.currentTimeMillis(); notifyCooling(batteryC());
-        while (!cancelled) {
-            float c = batteryC(); if (c < hotC() - 2f && !tooHot()) { try { ((NotificationManager) getSystemService(NOTIFICATION_SERVICE)).cancel(3); } catch (Exception ignored) { } return true; }
-            long mins = (System.currentTimeMillis() - since) / 60000;
-            final String m = L.f("Охлаждение телефона… %.1f °C", "Letting the phone cool down… %.1f °C", c);
-            ui.post(() -> status.setText(m + "  ·  " + L.f("пауза %d мин", "paused %d min", mins)));
-            try { Thread.sleep(5000); } catch (InterruptedException e) { Thread.currentThread().interrupt(); return false; }
+    int[] socZones; long socZonesAt;
+    /** mod: the chip temperature = the hottest zone among the CPU, GPU and NPU (Hexagon HVX / HMX) sensors; 0 = none found. The zone list is
+     *  rescanned every 5 minutes: the type names differ between SoCs, so the indices cannot be hardcoded. */
+    float socC() {
+        long now = System.currentTimeMillis();
+        if (socZones == null || now - socZonesAt > 300000L) {
+            java.util.List<Integer> l = new java.util.ArrayList<>();
+            for (int i = 0; i < 256; i++) {
+                String t = therm("thermal_zone" + i + "/type");
+                if (t == null) continue;
+                t = t.trim();
+                if (t.startsWith("cpu") || t.startsWith("cpuss") || t.startsWith("gpuss") || t.startsWith("nsphvx") || t.startsWith("nsphmx")) l.add(i);
+            }
+            socZones = new int[l.size()];
+            for (int k = 0; k < l.size(); k++) socZones[k] = l.get(k);
+            socZonesAt = now;
         }
-        return false;
+        float max = 0;
+        for (int i : socZones) {
+            String v = therm("thermal_zone" + i + "/temp");
+            if (v == null) continue;
+            try { float c = Integer.parseInt(v.trim()) / 1000f; if (c > max && c < 150f) max = c; } catch (NumberFormatException ignored) { }
+        }
+        return max;
     }
+    static String therm(String f) {
+        try (java.io.BufferedReader r = new java.io.BufferedReader(new java.io.FileReader("/sys/class/thermal/" + f))) { return r.readLine(); } catch (Exception e) { return null; }
+    }
+    /** mod: no automatic low clock any more: the phone's own thermal framework slows the NPU down when it gets hot. The switch stays, but only
+     *  as a manual choice ("always"): it lowers the clock on purpose, for users who prefer a cooler phone to a faster picture. */
     void coolTick(boolean force) {
         long t = System.currentTimeMillis(); if (!force && t - coolCheck < 3000) return; coolCheck = t;
-        String mode = Settings.coolMode(this); boolean on;
-        if (mode.equals("on")) on = true;
-        else if (mode.equals("off")) on = false;
-        else {
-            float c = batteryC(), lim = hotC() - 5f, hr = Float.NaN;   // mod: the low clock kicks in 5 °C under the pause threshold
-            if (android.os.Build.VERSION.SDK_INT >= 30) hr = ((PowerManager) getSystemService(POWER_SERVICE)).getThermalHeadroom(0);
-            boolean hot = c >= lim || (!Float.isNaN(hr) && hr >= 0.75f), cold = c < lim - 2f && (Float.isNaN(hr) || hr < 0.65f);
-            on = coolOn ? !cold : hot;
-        }
+        boolean on = Settings.coolMode(this).equals("on");
         coolOn = on;
         File cf = new File(D, "cool");
         try { if (on) { if (!cf.exists()) new java.io.FileOutputStream(cf).close(); } else if (cf.exists()) cf.delete(); } catch (Exception ignored) { }
     }
-    boolean tooHotStatus() { return ((PowerManager) getSystemService(POWER_SERVICE)).getCurrentThermalStatus() >= PowerManager.THERMAL_STATUS_SEVERE; }
 }

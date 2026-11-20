@@ -996,9 +996,9 @@ public class Main extends MainEdit {
     // ---- Anima "edit a photo" (img2img / inpainting), laid out like the Qwen and Mage photo box ----
 
     /** anima.sh environment for the extras that are on */
-    boolean memOk, hotStop;   // the memory warning was answered / a batch stopped because the phone got too hot
-    /** automatic cool mode: the NPU runs at full clock while the phone is cool and switches to the lower clock from 40 °C battery (43 °C while charging)
-     *  or a thermal headroom of 0.75, back to full speed 2 °C lower. The NPU processes read the file anima/cool before every step. */
+    boolean memOk, hotStop;   // the memory warning was answered / hotStop is kept only for the localapi hook: the app no longer pauses batches for heat
+    /** manual cool mode: when the user turns it on, the NPU runs at a lower clock (much less heat, ~17 % slower). The app does not switch it by
+     *  temperature any more: the phone's own thermal framework throttles the NPU. The NPU processes read the file anima/cool before every step. */
     // presets: named snapshots of the sampling fields, the negative prompt, the quality tags and the extras (per model family)
 
     TextView tokText;
@@ -1666,9 +1666,6 @@ public class Main extends MainEdit {
                     if (i >= curN || cancelled) { batchAdjustable = false; break; }
                     curIdx = i;
                 }
-                // mod: the first picture is not blocked (a phone that is merely warm would otherwise refuse to make anything); a batch still
-                // pauses between pictures, and Stop cancels the wait
-                if (!(i == 0 && Settings.tempFirstFree(this)) && tooHot() && !waitCool(t0)) { hotStop = true; break; }
                 previewFile().delete();
                 pvTime = 0;
                 ui.post(() -> { if (busy) { img.setImageDrawable(null); showImg(false); placeholder.setVisibility(View.VISIBLE); } });
@@ -1710,27 +1707,24 @@ public class Main extends MainEdit {
             }
             picStart = 0; varInit = null;
             final double sec = (System.currentTimeMillis() - t0) / 1000.0;
-            final boolean wasCancelled = cancelled, okAny = made > 0, hot = hotStop || tooHot();
-            hotStop = false;
+            final boolean wasCancelled = cancelled, okAny = made > 0;
             final int total = made;
             if (wasCancelled) loaded = false;   // Stop shut the server down
             synchronized (batchLock) { busy = false; Upscaler.npuBusy = false; cancelled = false; batchAdjustable = false; }
             app.stopService(new Intent(app, DownloadService.class));
             final Bitmap nb = lastBm;
             ui.post(() -> {
-                ApiServer.onFinish(this, wasCancelled, okAny, hot, nb);
+                ApiServer.onFinish(this, wasCancelled, okAny, false, nb);
                 getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
                 bar.setVisibility(View.GONE);
                 if (wasCancelled) status.setText(L.s("Остановлено", "Stopped"));
                 else if (!okAny) status.setText(L.f("Ошибка генерации (лог: %s)", "Generation failed (log: %s)", isMoss() ? "files/moss/moss.log" : isQwen() ? "files/qwen/qwen.log" : isMage() ? "files/mage/mage.log" : "files/anima/animad.log"));
                 else status.setText(L.f("Готово за %.1f с", "Done in %.1f s", sec));
-                if (hot) status.setText(status.getText() + "  ·  " + L.s("Пауза: телефон сильно нагрелся, дайте ему остыть", "Paused: the phone is very hot, let it cool down"));
                 setModelUi(loaded, false, "");
-                if (calibrating) { if (okAny && !wasCancelled && !hot) ui.postDelayed(Main.this::calibNext, 600); else finishCalibration(false); }
+                if (calibrating) { if (okAny && !wasCancelled) ui.postDelayed(Main.this::calibNext, 600); else finishCalibration(false); }
                 if (okAny && !visible) notifyDone(app, nb, pr, total);
                 Runnable next = afterGen; afterGen = null;
-                if (next != null && okAny && !wasCancelled && !hot) next.run();   // the queue goes on, unless the phone is too hot (it stays queued)
-                else if (next != null && hot) Toast.makeText(this, L.s("Очередь на паузе: телефон слишком горячий", "Queue paused: the phone is too hot"), Toast.LENGTH_LONG).show();
+                if (next != null && okAny && !wasCancelled) next.run();   // the queue goes on: the phone's own thermal framework handles the heat
             });
         });
     }

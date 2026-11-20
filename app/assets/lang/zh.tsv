@@ -671,3 +671,4 @@ Start	开始
 Calibration done: the time on the button is more exact now	校准完成：按钮上的时间现在更准确了
 Calibration stopped	校准已中止
   (text %.1f · DiT %.1f · decode %.1f s)	  (文本 %.1f · DiT %.1f · 解码 %.1f 秒)
+The NPU runs at a lower clock: the phone gets much less hot, a picture takes ~17 % longer. Off by default: the app no longer slows down or pauses by itself, the phone's own thermal framework does that.	NPU 以较低频率运行：手机发热显著降低，单张图片生成时间约延长 17%。默认关闭：应用不再自行降速或暂停，交给手机系统温控。

@@ -28,9 +28,10 @@ if [ -n "$MDIR" ] && [ -z "$ANIMAD_HMXG" ] && [ -f "$MDIR/blk39.bin" ]; then exp
 # not exported: system tools (setsid, grep...) must not see /vendor/lib64 (its old libc++ breaks them on newer Android); only our binaries get it, with /system/lib64 listed first so the system libc++ wins over the older vendor copy
 RUNX='export LD_LIBRARY_PATH="$LIBS" ADSP_LIBRARY_PATH="$ADSPP"; exec "$@"'   # "env VAR=.. cmd" is not used: an app path contains "=" and env would take it for an assignment
 ADSPP=${BIN:-$A}
-# Snapdragon 8 Gen 2 (Hexagon V73) needs its own build of the DiT kernels: it ships as libmega_skel_v73.so and is copied under the name the DSP
-# loader looks for into a dir listed before $BIN (same trick as moss.sh); the QNN contexts pick their V73 skel by themselves
-case "$(getprop ro.soc.model)" in SM8550|SM8650) DSPA=v73;; *) DSPA=;; esac
+# Snapdragon 8 Gen 2 / 8 Gen 3 / 8 Elite / 8 Elite Gen 5 (Hexagon V73 and newer) use the V73 build of the DiT kernels: it ships as
+# libmega_skel_v73.so and is copied under the name the DSP loader looks for into a dir listed before $BIN (same trick as moss.sh); the QNN
+# contexts pick their V73/V75/V79/V81 skeleton by themselves
+case "$(getprop ro.soc.model)" in SM8550|SM8650|SM8750|SM8850) DSPA=v73;; *) DSPA=;; esac
 if [ -n "$DSPA" ] && [ -f "$BIN/libmega_skel_$DSPA.so" ]; then
   mkdir -p $A/dsp_$DSPA; cmp -s "$BIN/libmega_skel_$DSPA.so" $A/dsp_$DSPA/libmega_skel.so || cp -f "$BIN/libmega_skel_$DSPA.so" $A/dsp_$DSPA/libmega_skel.so
   ADSPP="$A/dsp_$DSPA;$BIN"

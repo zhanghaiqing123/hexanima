@@ -1,4 +1,4 @@
-# HexAnima 本地生图接口 · SillyTavern 适配（V73 / 8 Gen 2 · 8 Gen 3）
+# HexAnima 本地生图接口 · SillyTavern 适配（V73 内核 / 8 Gen 2 · 8 Gen 3 · 8 Elite · 8 Elite Gen 5）
 
 > **本项目是 [ayanoby/hexanima](https://github.com/ayanoby/hexanima) 的 fork。**
 > 原版是最初的 HexAnima：Hexagon NPU 内核、采样器、设备端推理、App、模型包，整件事的基础。
@@ -17,6 +17,10 @@ ayanoby/hexanima                 原版：NPU 内核、模型包、App 本体（
        └─ 本项目（本仓库）          V73 版 + 本地 8081 接口 + 模型备份 + 上游 1.8.3 体验功能
 ```
 
+> **兼容性（v10 起）**：8 Gen 2 / 8 Gen 3 / 8 Elite（SM8750）/ 8 Elite Gen 5（SM8850）可用。
+> **8 Gen 1 / 8+ Gen 1（SM8450 / SM8475）从 v10 起不再支持**（QNN 2.51 不再提供 V69 skel），
+> 这两颗 SoC 请下载 **v9 或更早**的版本。
+>
 > 仓库同时保留上游 ayanoby/hexanima 的源码树（`app/`、`chainrun/`、`docs/` 等，MIT）作为参考；
 > 本项目的构建使用的是 GrimmDev `1.9.5-v73` 的源码（见[自己重新打包](#自己重新打包)）。
 
@@ -48,6 +52,7 @@ ayanoby/hexanima                 原版：NPU 内核、模型包、App 本体（
 | v3 | `HexAnima-1.9.5-v73-localapi-v3.apk` | `1.9.5-v73+api3d` | 模型导出/导入、离线目录、检查点文件夹转换、模型页 MODEL BACKUP 卡片 |
 | v4 | `HexAnima-1.9.5-v73-localapi-v4.apk` | `1.9.5-v73+api4` | 上游 1.8.3 六项功能 + 备份界面中英双语 |
 | v5 | `HexAnima-1.9.5-v73-localapi-v5.apk` | `1.9.5-v73+api5` | 修复本地 `.safetensors` 转换识别 + 转换界面中文化 |
+| v10 | `HexAnima-1.9.5-v73-localapi-v10.apk` | `1.9.5-v73+api10` | 去掉 App 自带的温控暂停；RAM 条加 SoC 温度；QNN 2.51，支持 8 Elite / 8 Elite Gen 5（8 Gen 1 不再支持） |
 | v9 | `HexAnima-1.9.5-v73-localapi-v9.apk` | `1.9.5-v73+api9` | 每个 LoRA 三个开关：启用（决定加载/重载）、智能（按触发词写标签）、写标签（永远写） |
 | v8 | `HexAnima-1.9.5-v73-localapi-v8.apk` | `1.9.5-v73+api8` | 激活改为存储开关（决定加载，只有切换才重载）；标签只作标记，随触发词自动增删 |
 | v7 | `HexAnima-1.9.5-v73-localapi-v7.apk` | `1.9.5-v73+api7` | LoRA 触发词/自动挂载、库界面重排、主界面下拉、温控上限可调 |
@@ -232,7 +237,7 @@ data: {"type":"error","message":"..."}
 
 ---
 
-## 新增功能（v1 → v9）
+## 新增功能（v1 → v10）
 
 ### v1 · 本地接口
 8081 HTTP/SSE；反射驱动 App 自己的生成流程（同一套 UI 管线、同一份设置）。
@@ -268,6 +273,14 @@ v3/v4 的转换界面会把**任何**文件都判成 “not an Anima DiT”（�
 * 转换出的模型目录补写 `hdr.bin`（源文件的 safetensors 头），stub 由它生成，导出/再导入可以重建；
   另加 `.custom` 标记，并在转换前检查基础文件（文本编码器 / VAE）是否已下载——否则模型会“转完看不见”。
 * 转换列表、进度、失败原因（缺 adaln / dtype 不支持 / 目录提供方不给真实文件…）全部中英双语。
+
+### v10 · 温控交还系统 + SoC 温度 + 8 Elite
+* **不再由 App 暂停或降温**：删掉电池温度阈值滑杆、「太热也先出一张」开关、`waitCool()` 冷却等待、高温通知、队列/校准的热门禁，以及跑完后那句「已暂停：手机过热，请让其冷却」——它原本是出图完成之后又查了一次温度，属于误报。系统热等级提示保留，只提示不拦人。
+* **降温模式**只剩手动「总是 / 从不」，默认「从不」。
+* **RAM 条新增 SoC 温度**：`RAM … · 电池 34.3 °C · SoC 61 °C`；取 CPU/GPU/NPU（`cpuss`、`cpu-*`、`gpuss`、`nsphvx`、`nsphmx`）热区的最大值，读不到就只显示电池温度。
+* **8 Elite / 8 Elite Gen 5**：QNN 2.28 → 2.51，新增 V79 / V81 skel；`dspArch` 把 SM8750 / SM8850 也映射到 `v73`，模型包不用重下；`anima.sh` 的 DSPA case 加 SM8850。
+* **8 Gen 1 / 8+ Gen 1 失去支持**：QNN 2.51 不再带 V69 skel；这两颗 SoC 请用 v9。
+* Mage / MOSS / Qwen 在 8 Elite / 8 Elite Gen 5 上不保证（脚本没给这两颗 SoC 走 v73 内核）；8 Gen 3 上保持原样。
 
 ### v9 · 标签变成可控的三件套
 实测确认标签对出图没有影响（引擎加载的是「启用」集合）。于是每行三个开关：
@@ -404,7 +417,8 @@ keytool -genkeypair -keystore hexanima.jks -alias hexanima \
 | 640×960 · 6 步 · cfg 4 · euler_a | ≈ 43 秒 |
 | 640×704 · 8 步 · cfg 2 · dpm++2m / exponential | ≈ 38 秒 |
 
-* 连续出图后撞温控会明显变慢甚至过曝，这是设备温控，不是接口问题。
+* v10 实测：8 Gen 3（本机）、8 Elite、8 Elite Gen 5 均可正常出图；8 Gen 2 走同一套 v73 路径，预计可用（未实测）。
+* 连续出图后系统温控仍会让机器变慢甚至过曝，这是设备侧行为，v10 起 App 不再介入。
 * 返回数据逐字节校验过：`512×512 → 786,432 字节 RGB → 1,048,576 字符 base64`。
 * 酒馆脚本 v7.6 实测可用（含 SSE 进度、图片落地、画廊）。
 * v4 的六项功能在 8 Gen 3 上逐项验证过；8 Gen 2（V73）理论上同样适用（代码层面没有设备分支）。
@@ -418,6 +432,8 @@ keytool -genkeypair -keystore hexanima.jks -alias hexanima \
 * **端口固定 8081**，且与 Local Dream 冲突（见上）。
 * **单任务串行**：同一时间只处理一个 `/generate`，后来的请求排队。
 * **步数上限 60**（App 界面本身也只允许 1–60）。
+* **8 Gen 1 / 8+ Gen 1 无支持**：v10 起 QNN 2.51 不带 V69 skel，请用 v9 或更早版本。
+* **Mage / MOSS / Qwen 在 8 Elite / 8 Elite Gen 5 上不保证**：脚本只对 8 Gen 2 / 8 Gen 3 选了 v73 内核。
 * **调度器只能设 4 种**：`sgm_uniform`、`karras`、`exponential`、`discrete`。App 里另外几种只能靠"继承"生效。
 * **不自动启动**：进程被杀后需要重新打开 App。
 * **无鉴权**：见[安全提醒](#安全提醒)。

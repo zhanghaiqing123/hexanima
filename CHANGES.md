@@ -5,6 +5,7 @@
 
 | 版本 | 服务版本 | APK | sha256（完整） |
 |---|---|---|---|
+| v10 | `1.9.5-v73+api10` | `HexAnima-1.9.5-v73-localapi-v10.apk` | `2d27d665bd3eacfef48a3cd3f545e6de88e1e088c10bef4fa2a07edfc0a27fba` |
 | v9 | `1.9.5-v73+api9` | `HexAnima-1.9.5-v73-localapi-v9.apk` | `9bf2fc16650bb6abf2292eda1f17fbf1ae1e7cc968c4bcb27bb7b07bee448e7f` |
 | v8 | `1.9.5-v73+api8` | `HexAnima-1.9.5-v73-localapi-v8.apk` | `f5df10dc31b3db2b51af3999a5c6f90442179920ebbd9438a2acd7f03a3fa8fb` |
 | v7 | `1.9.5-v73+api7` | `HexAnima-1.9.5-v73-localapi-v7.apk` | `6b987510160e047f4289a192b6b278c1fc85143708810f0b6563cd9b40722f7a` |
@@ -13,6 +14,19 @@
 | v4 | `1.9.5-v73+api4` | `HexAnima-1.9.5-v73-localapi-v4.apk` | `7626cb8ba45d8e4601e3987ea17eee11f9a5f46e9f1a99036c0ce7fb8c84f907` |
 | v3 | `1.9.5-v73+api3d` | `HexAnima-1.9.5-v73-localapi-v3.apk` | `d1ead0a46cbafda39a25930b4bccdebf237d15559898f9ce34a111de04063297` |
 | v2 | `1.9.5-v73+api3` | `HexAnima-1.9.5-v73-localapi-v2.apk` | `56304bb73c9959c65af37c59e512e818dfc84edc074f7b1bce3dc567fc91c3d7` |
+
+---
+
+## v10 — 2026-11-20
+
+**温控交还给系统**：App 不再自己判断「过热」、不再暂停。删掉的东西：电池温度阈值滑杆、「太热也先出一张」开关、`tooHot()/waitCool()` 冷却等待、高温通知、队列/校准里的热门禁，以及跑完后那句「已暂停：手机过热，请让其冷却」——它原本是在出图完成之后又查了一次 `tooHot()`，属于纯误报。系统热等级 ≥ MODERATE 的提示保留，只提示、不拦人。降温模式只剩手动「总是/从不」，默认「从不」。
+
+**RAM 条新增 SoC 温度**：`RAM … · 电池 34.3 °C · SoC 61 °C`。SoC 取 `/sys/class/thermal` 里 CPU/GPU/NPU（`cpuss`、`cpu-*`、`gpuss`、`nsphvx`、`nsphmx`）热区的最大值，每 5 分钟重扫一次热区名；读不到（个别 ROM 的 SELinux 拦 `sysfs_thermal`）就只显示电池温度。
+
+**8 Elite / 8 Elite Gen 5 支持**：QNN 2.28 → 2.51，替换 `libQnnHtp.so` / `libQnnSystem.so` 与 V73/75/79 的 skel+stub，新增 V81 skel+stub；`Compat.dspArch()` 把 SM8750 / SM8850 也映射到 `v73`（模型包仍是 v73，不用重下）；`anima.sh` 的 DSPA case 加 `SM8850`。8 Gen 1 / 8+ Gen 1（V69）失去支持（QNN 2.51 不再带 V69 skel，已接受）。8 Gen 3 仍是 v73 + V73Skel；Mage/MOSS/Qwen 在 8 Elite Gen 5 上不保证，在 8 Gen 3 上保持原样。
+
+* APK 181.7 MB → 190.3 MB；原生库来自 `HexAnima V81 CN_1.9.5-v81cn.apk`（包名 `com.hexanima.npu.v81`、签名不同，可与本包并存），其余 40 多个 `.so` 与 v9 逐字节相同。
+* 实测：8 Gen 3（SM8650）、8 Elite（SM8750）、8 Elite Gen 5（SM8850）均可正常出图；8 Gen 2（SM8550）走同一套 v73 路径，未实测但预期可用。8 Gen 1 / 8+ Gen 1 请用 v9 或更早版本。
 
 ---
 
