@@ -1539,15 +1539,25 @@ public class Main extends MainEdit {
     /** mod: v9/v10 persisted the official huggingface URL as the catalog default (the Models screen saved it back on every open); v11
      *  defaults to hf-mirror, so that one exact value is switched over once. A URL the user typed is left alone. */
     static void migrateBase(SharedPreferences p) {
-        if (p.getBoolean("base_migrated_v11", false)) return;
-        String b = p.getString("base", "");
-        if (b.equals("https://huggingface.co/ayanoby/anima-npu-packs/resolve/main/") || b.equals("https://huggingface.co/ayanoby/anima-npu-packs/resolve/main"))
-            p.edit().putString("base", MainTools.DEFAULT_BASE).apply();
-        p.edit().putBoolean("base_migrated_v11", true).apply();
+        if (!p.getBoolean("base_migrated_v11", false)) {
+            String b = p.getString("base", "");
+            if (b.equals("https://huggingface.co/ayanoby/anima-npu-packs/resolve/main/") || b.equals("https://huggingface.co/ayanoby/anima-npu-packs/resolve/main"))
+                p.edit().putString("base", MainTools.DEFAULT_BASE).apply();
+            p.edit().putBoolean("base_migrated_v11", true).apply();
+        }
+        // v12: hf-mirror.com started answering 308 -> huggingface.co; the stored value (the v11 default) goes to the backup mirror once.
+        // A URL the user picked afterwards (official / custom) is left alone.
+        if (!p.getBoolean("base_migrated_v12", false)) {
+            String b = p.getString("base", "");
+            if (b.equals("https://hf-mirror.com/ayanoby/anima-npu-packs/resolve/main/") || b.equals("https://hf-mirror.com/ayanoby/anima-npu-packs/resolve/main"))
+                p.edit().putString("base", MainTools.DEFAULT_BASE).apply();
+            p.edit().putBoolean("base_migrated_v12", true).apply();
+        }
     }
 
     void refreshModels() {
         migrateBase(prefs());
+        Mirror.set(prefs().getString("base", DEFAULT_BASE));
         ids = store.installed();
         String was = prefs().getString("model", "");
         model = ids.isEmpty() ? "" : ids.contains(model) ? model : "";

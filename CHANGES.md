@@ -5,6 +5,7 @@
 
 | 版本 | 服务版本 | APK | sha256（完整） |
 |---|---|---|---|
+| v12 | `1.9.5-v73+api12` | `HexAnima-1.9.5-v73-localapi-v12.apk` | `bbc1cc78af32b0c168d0887ec3ef24bc5104db961719b39cea75f3e91b58d27e` |
 | v11 | `1.9.5-v73+api11` | `HexAnima-1.9.5-v73-localapi-v11.apk` | `2186fd4cc93d2382ce8e5ef3828d7cbab7ce0818d5969a058e0071cad4f88c48` |
 | v10 | `1.9.5-v73+api10` | `HexAnima-1.9.5-v73-localapi-v10.apk` | `2d27d665bd3eacfef48a3cd3f545e6de88e1e088c10bef4fa2a07edfc0a27fba` |
 | v9 | `1.9.5-v73+api9` | `HexAnima-1.9.5-v73-localapi-v9.apk` | `9bf2fc16650bb6abf2292eda1f17fbf1ae1e7cc968c4bcb27bb7b07bee448e7f` |
@@ -15,6 +16,21 @@
 | v4 | `1.9.5-v73+api4` | `HexAnima-1.9.5-v73-localapi-v4.apk` | `7626cb8ba45d8e4601e3987ea17eee11f9a5f46e9f1a99036c0ce7fb8c84f907` |
 | v3 | `1.9.5-v73+api3d` | `HexAnima-1.9.5-v73-localapi-v3.apk` | `d1ead0a46cbafda39a25930b4bccdebf237d15559898f9ce34a111de04063297` |
 | v2 | `1.9.5-v73+api3` | `HexAnima-1.9.5-v73-localapi-v2.apk` | `56304bb73c9959c65af37c59e512e818dfc84edc074f7b1bce3dc567fc91c3d7` |
+
+---
+
+## v12 — 2026-11-20
+
+**下载真正走所选镜像，不再绕回 huggingface.co**。原因有两层：`catalog6.json` 里每个 pack 的地址是绝对的 `https://huggingface.co/...`，`Models.installModel()` 直接拿它下载；V73 公共包的 `commonBase()` 又把地址写死在 `hf-mirror.com`。而 hf-mirror.com 现在对 `/resolve/` 一律 **308 → huggingface.co**，国内就卡到超时（连接 20 s / 读取 30 s，最多 6 次重试 ≈ 1–3 分钟），表现就是「连一两分钟然后取消」。
+
+v12 在 `Models.open()` 入口注入一次 `Mirror.fix(url)`：把 `huggingface.co`、`hf-mirror.com`、`hf-mirror.net` 的主机名替换成当前下载源的 origin，路径与 query 原样保留。catalog、manifest、公共包、模型权重、ADetailer、Mage/Qwen 运行时都经过这个入口，因此任何 HF 兼容镜像都能全程生效。
+
+* 默认下载源改为 **hf-mirror.net**（备用镜像，当前可用）；
+* 「Источник / Source」四项：**备用镜像 hf-mirror.net（推荐）** / **hf-mirror.com（标注「当前会 308 跳转 huggingface.co」）** / **官方直连 huggingface.co** / **自定义地址**；
+* 官方直连模式完整保留：选 `huggingface.co` 时 `Mirror` 会把 hf-mirror.com 的地址也改回官方站，不会偷偷走镜像；
+* 迁移：`base` 若正好等于 v11 的默认值 `hf-mirror.com/...`，改用 hf-mirror.net（标记 `base_migrated_v12`）；用户自己选的官方或自定义地址不动。
+
+实测链路（离线脚本，与 App 同一套 URL）：catalog6 `200` → pack URL 重写为 hf-mirror.net → manifest `200` → 权重 `Range 206`。
 
 ---
 

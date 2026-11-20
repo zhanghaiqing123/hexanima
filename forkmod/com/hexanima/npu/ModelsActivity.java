@@ -46,26 +46,31 @@ public class ModelsActivity extends Base {
     };
 
     String prefBase() { return getSharedPreferences("anima", 0).getString("base", Main.DEFAULT_BASE); }
-    /** mod: the download source. hf-mirror is the domestic mirror of huggingface.co (same pack); the official host needs a direct connection. */
-    static final String MIRROR = "https://hf-mirror.com/ayanoby/anima-npu-packs/resolve/main/";
+    /** mod: the download source. hf-mirror.net is the backup domestic mirror (hf-mirror.com answers 308 -> huggingface.co since Nov 2026);
+     *  the official host is the plain, direct huggingface.co mode and needs a working connection to it. */
+    static final String NET = "https://hf-mirror.net/ayanoby/anima-npu-packs/resolve/main/";
+    static final String COM = "https://hf-mirror.com/ayanoby/anima-npu-packs/resolve/main/";
     static final String OFFICIAL = "https://huggingface.co/ayanoby/anima-npu-packs/resolve/main/";
     void setBase(String b) {
         b = b.trim().replaceAll("/*$", "") + "/";
         if (b.length() < 12) return;
+        Mirror.set(b);
         url.setText(b);
         getSharedPreferences("anima", 0).edit().putString("base", b).apply();
         load();
     }
     void sourceDialog() {
         final String cur = prefBase();
-        String[] n = {Tr.s(this, "Domestic mirror · hf-mirror (recommended)", "国内镜像 · hf-mirror（推荐）"),
-                      Tr.s(this, "Official · huggingface.co (needs a direct connection)", "官方 · huggingface.co（需能直连）"),
-                      Tr.s(this, "Custom URL…", "自定义地址…")};
-        int sel = cur.startsWith(MIRROR) ? 0 : cur.startsWith(OFFICIAL) ? 1 : 2;
+        String[] n = {Tr.s(this, "Backup mirror · hf-mirror.net (recommended, works now)", "备用镜像 · hf-mirror.net（推荐，当前可用）"),
+                      Tr.s(this, "hf-mirror.com (currently answers 308 and redirects to huggingface.co)", "hf-mirror.com（当前会 308 跳转 huggingface.co）"),
+                      Tr.s(this, "Direct · huggingface.co (no mirror, needs a working connection)", "官方直连 · huggingface.co（不走镜像，需能直连）"),
+                      Tr.s(this, "Custom URL (any Hugging Face-compatible mirror)", "自定义地址（任意 HF 兼容镜像）")};
+        int sel = cur.startsWith(NET) ? 0 : cur.startsWith(COM) ? 1 : cur.startsWith(OFFICIAL) ? 2 : 3;
         builder().setTitle(Tr.s(this, "Download source", "下载源")).setSingleChoiceItems(n, sel, (d, i) -> {
             d.dismiss();
-            if (i == 0) setBase(MIRROR);
-            else if (i == 1) setBase(OFFICIAL);
+            if (i == 0) setBase(NET);
+            else if (i == 1) setBase(COM);
+            else if (i == 2) setBase(OFFICIAL);
             else {
                 final EditText e = field("https://…/resolve/main/"); e.setText(cur); e.setTextSize(13);
                 builder().setTitle(Tr.s(this, "Custom URL", "自定义地址")).setView(e)
@@ -111,6 +116,7 @@ public class ModelsActivity extends Base {
         list.addView(text(L.s("Загружаю каталог…", "Loading catalog…"), 13, DIM, false));
         final String base = url.getText().toString().trim().replaceAll("/*$", "") + "/";
         getSharedPreferences("anima", 0).edit().putString("base", base).apply();
+        Mirror.set(base);   // mod: rewrite huggingface.co / hf-mirror.com URLs to the chosen mirror before any download
         io.submit(() -> {
             try { final List<Models.Item> cat = store.catalog(base); Models.ensureMage(cat); Backup.saveCatalogAt(this, cat); for (Models.Item it : cat) store.refreshMeta(it); ui.post(() -> { items = cat; render(); }); }
             catch (Exception e) { ui.post(() -> Backup.onCatalogError(this, e)); }
