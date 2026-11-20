@@ -1331,6 +1331,11 @@ public class Main extends MainEdit {
             for (TextView t : b) { LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, -2); lp.rightMargin = dp(6); bs.addView(t, lp); }
             col.addView(bs);
             card.addView(col, new LinearLayout.LayoutParams(0, -2, 1));
+            if (importedModel(id)) {   // mod: a model converted/imported on the phone can be removed here (the catalog delete only covers catalog models)
+                TextView del = text("\uD83D\uDDD1", 17, BAD, false); del.setPadding(dp(6), dp(4), dp(6), dp(4));
+                del.setOnClickListener(x -> { dlg[0].dismiss(); deleteImported(id); });
+                card.addView(del);
+            }
             TextView pen = text("✎", 18, DIM, false); pen.setPadding(dp(10), dp(4), dp(10), dp(4));
             pen.setOnClickListener(x -> renameDialog(false, id, store.name(id), () -> { dlg[0].dismiss(); setModelUi(loaded, false, ""); pickModel(); }));
             card.addView(pen);
@@ -1352,6 +1357,24 @@ public class Main extends MainEdit {
         }
         v.addView(acts);
         dlg[0] = dialog(v);
+    }
+
+    /** mod: an imported / converted model (AnimaImport writes "imported": true into meta.json) */
+    boolean importedModel(String id) {
+        try { return new JSONObject(Models.read(new File(store.modelDir(id), "meta.json"))).optBoolean("imported", false); } catch (Exception e) { return false; }
+    }
+    /** mod: delete an imported model: stop the server when it is the loaded one, drop the alias, remove the files, refresh the picker */
+    void deleteImported(final String id) {
+        if (busy) { Toast.makeText(this, L.s("Дождитесь окончания генерации", "Wait for the generation to finish"), Toast.LENGTH_SHORT).show(); return; }
+        builder().setMessage(L.f("Удалить «%s»? Файлы модели будут удалены; её можно импортировать заново.", "Delete “%s”? The model files are removed; you can import it again later.", shownModel(id)))
+            .setPositiveButton(L.s("Удалить", "Delete"), (d, w) -> {
+                if (id.equals(model)) { loaded = false; setModelUi(false, false, ""); ex2.submit(() -> ctlSh.run("sh " + D + "/anima.sh stop < /dev/null >/dev/null 2>&1")); }
+                setAlias(false, id, "");
+                store.delete(id);
+                ModelsActivity.deleted = id;
+                refreshModels();
+                pickModel();
+            }).setNegativeButton(L.s("Отмена", "Cancel"), null).show();
     }
 
 

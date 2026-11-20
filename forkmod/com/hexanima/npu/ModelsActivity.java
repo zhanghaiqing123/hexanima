@@ -46,6 +46,34 @@ public class ModelsActivity extends Base {
     };
 
     String prefBase() { return getSharedPreferences("anima", 0).getString("base", Main.DEFAULT_BASE); }
+    /** mod: the download source. hf-mirror is the domestic mirror of huggingface.co (same pack); the official host needs a direct connection. */
+    static final String MIRROR = "https://hf-mirror.com/ayanoby/anima-npu-packs/resolve/main/";
+    static final String OFFICIAL = "https://huggingface.co/ayanoby/anima-npu-packs/resolve/main/";
+    void setBase(String b) {
+        b = b.trim().replaceAll("/*$", "") + "/";
+        if (b.length() < 12) return;
+        url.setText(b);
+        getSharedPreferences("anima", 0).edit().putString("base", b).apply();
+        load();
+    }
+    void sourceDialog() {
+        final String cur = prefBase();
+        String[] n = {Tr.s(this, "Domestic mirror · hf-mirror (recommended)", "国内镜像 · hf-mirror（推荐）"),
+                      Tr.s(this, "Official · huggingface.co (needs a direct connection)", "官方 · huggingface.co（需能直连）"),
+                      Tr.s(this, "Custom URL…", "自定义地址…")};
+        int sel = cur.startsWith(MIRROR) ? 0 : cur.startsWith(OFFICIAL) ? 1 : 2;
+        builder().setTitle(Tr.s(this, "Download source", "下载源")).setSingleChoiceItems(n, sel, (d, i) -> {
+            d.dismiss();
+            if (i == 0) setBase(MIRROR);
+            else if (i == 1) setBase(OFFICIAL);
+            else {
+                final EditText e = field("https://…/resolve/main/"); e.setText(cur); e.setTextSize(13);
+                builder().setTitle(Tr.s(this, "Custom URL", "自定义地址")).setView(e)
+                    .setPositiveButton("OK", (dd, w) -> { String v = e.getText().toString().trim(); if (!v.isEmpty()) setBase(v); })
+                    .setNegativeButton(L.s("Отмена", "Cancel"), null).show();
+            }
+        }).show();
+    }
 
     @Override protected void onCreate(Bundle b) {
         super.onCreate(b);
@@ -56,7 +84,7 @@ public class ModelsActivity extends Base {
         col.addView(info);
         url = field(L.s("Адрес каталога (…/resolve/main/)", "Catalog URL (…/resolve/main/)")); url.setText(prefBase()); url.setTextSize(12); url.setBackground(bg(CARD, 14)); url.setVisibility(View.GONE);
         col.addView(url);
-        src.setOnClickListener(v -> { boolean show = url.getVisibility() != View.VISIBLE; url.setVisibility(show ? View.VISIBLE : View.GONE); if (!show) load(); });
+        src.setOnClickListener(v -> sourceDialog());   // mod: hf-mirror / official / custom
         list = new LinearLayout(this); list.setOrientation(LinearLayout.VERTICAL);
         col.addView(list);
         String soc = android.os.Build.VERSION.SDK_INT >= 31 ? android.os.Build.SOC_MODEL : "?";

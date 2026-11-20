@@ -49,7 +49,7 @@ abstract class MainRun extends MainLora {
     static final String AD_SHA = "aa44f31aed57284eec9fe6c8152c03e7625424f78ef276868baae7efc952c3d0";
     /** hand_yolov8n (Bingsu/adetailer, Apache-2.0) converted for sd.cpp with its convert_yolov8_to_safetensors.py, hosted with the V73 packs */
     static final String AD_HAND_SHA = "51f09f73c259264d6d1bb856d8421a2bee6e5543093eb41fa9cd0aeb593f45d3";
-    static final String AD_HAND_URL = "https://huggingface.co/GrimmDev-Glitch/hexanima-packs/resolve/main/adetailer/hand_yolov8n.safetensors";
+    static final String AD_HAND_URL = "https://hf-mirror.com/GrimmDev-Glitch/hexanima-packs/resolve/main/adetailer/hand_yolov8n.safetensors";
     /** the hand detector, in its own folder (adModel() takes any .safetensors of the face folder) */
     File ensureAdHands(long t0) {
         File dir = new File(getFilesDir(), "adetailer_hands"), out = new File(dir, "hand_yolov8n.safetensors");
@@ -61,7 +61,7 @@ abstract class MainRun extends MainLora {
     static String handPrompt(String pr) { return pr + ", detailed hands, five fingers, natural hands"; }
     /** hands need more room than faces: stronger redraw, its own steps (a turbo model has only a few), a margin around the hand and a slightly grown mask */
     static final String AD_HAND_ARGS = "confidence=0.35,denoising_strength=0.55,steps=8,inpaint_padding=48,dilate_erode=8";
-    static final String AD_URL = "https://huggingface.co/GrimmDev-Glitch/hexanima-packs/resolve/main/adetailer/face_yolov8n.safetensors";
+    static final String AD_URL = "https://hf-mirror.com/GrimmDev-Glitch/hexanima-packs/resolve/main/adetailer/face_yolov8n.safetensors";
     static final int STEPS = 4;   // the models are distilled for 4 steps (see Info)
     ProgressBar bar, ramBar;
     volatile int curIdx, curN = 1;

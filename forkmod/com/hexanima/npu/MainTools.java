@@ -51,7 +51,7 @@ abstract class MainTools extends MainRun {
     volatile double appGb; volatile boolean appBusy;
     int tick;
     abstract void refreshState();
-    static final String DEFAULT_BASE = "https://huggingface.co/ayanoby/anima-npu-packs/resolve/main/";
+    static final String DEFAULT_BASE = "https://hf-mirror.com/ayanoby/anima-npu-packs/resolve/main/";   // mod: hf-mirror is reachable from China; Settings/Models -> Source switches to the official host
     static final String[][] PALETTE = {
         {"Calidad|Quality", "masterpiece", "best quality", "very aesthetic", "absurdres", "highres", "newest", "detailed", "score_9"},
         {"Encuadre|Framing", "portrait", "upper body", "cowboy shot", "full body", "close-up", "looking at viewer", "from above", "from below", "from side", "dutch angle", "wide shot"},
@@ -534,7 +534,7 @@ abstract class MainTools extends MainRun {
                 byte[] b = new byte[1 << 16]; long done = 0, last = 0; final long tt = total;
                 for (int n; (n = in.read(b)) > 0; ) { if (stop.get()) throw new IOException(L.s("Отменено", "Cancelled")); o.write(b, 0, n); done += n; if (done - last > (32 << 20)) { last = done; final long dd = done; ui.post(() -> { if (tt > 0) pb.setProgress((int) (1000 * dd / tt)); pt.setText(String.format(java.util.Locale.US, "%.1f GB", dd / 1e9)); }); } }
             } catch (Exception e) { err = e.getMessage(); }
-            if (err == null) err = AnimaImport.convert(getFilesDir(), BIN, DEFAULT_BASE, src, "cv" + Long.toHexString(System.currentTimeMillis()), name,
+            if (err == null) err = AnimaImport.convert(getFilesDir(), BIN, prefs().getString("base", DEFAULT_BASE), src, "cv" + Long.toHexString(System.currentTimeMillis()), name,
                 (d, t, what) -> ui.post(() -> { pb.setProgress(1000 * d / Math.max(1, t)); pt.setText(what + " " + d + "/" + t); }), stop);
             if (err != null) src.delete();
             final String e2 = err;

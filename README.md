@@ -50,6 +50,7 @@ ayanoby/hexanima                 原版：NPU 内核、模型包、App 本体（
 | v3 | `HexAnima-1.9.5-v73-localapi-v3.apk` | `1.9.5-v73+api3d` | 模型导出/导入、离线目录、检查点文件夹转换、模型页 MODEL BACKUP 卡片 |
 | v4 | `HexAnima-1.9.5-v73-localapi-v4.apk` | `1.9.5-v73+api4` | 上游 1.8.3 六项功能 + 备份界面中英双语 |
 | v5 | `HexAnima-1.9.5-v73-localapi-v5.apk` | `1.9.5-v73+api5` | 修复本地 `.safetensors` 转换识别 + 转换界面中文化 |
+| v11 | `HexAnima-1.9.5-v73-localapi-v11.apk` | `1.9.5-v73+api11` | 导入/转换的模型可以删除；下载源三选一（hf-mirror 默认 / 官方 / 自定义） |
 | v10 | `HexAnima-1.9.5-v73-localapi-v10.apk` | `1.9.5-v73+api10` | 去掉 App 自带的温控暂停；RAM 条加 SoC 温度；QNN 2.51，支持 8 Elite / 8 Elite Gen 5（8 Gen 1 不再支持） |
 | v9 | `HexAnima-1.9.5-v73-localapi-v9.apk` | `1.9.5-v73+api9` | 每个 LoRA 三个开关：启用（决定加载/重载）、智能（按触发词写标签）、写标签（永远写） |
 | v8 | `HexAnima-1.9.5-v73-localapi-v8.apk` | `1.9.5-v73+api8` | 激活改为存储开关（决定加载，只有切换才重载）；标签只作标记，随触发词自动增删 |
@@ -235,7 +236,7 @@ data: {"type":"error","message":"..."}
 
 ---
 
-## 新增功能（v1 → v10）
+## 新增功能（v1 → v11）
 
 ### v1 · 本地接口
 8081 HTTP/SSE；反射驱动 App 自己的生成流程（同一套 UI 管线、同一份设置）。
@@ -271,6 +272,11 @@ v3/v4 的转换界面会把**任何**文件都判成 “not an Anima DiT”（�
 * 转换出的模型目录补写 `hdr.bin`（源文件的 safetensors 头），stub 由它生成，导出/再导入可以重建；
   另加 `.custom` 标记，并在转换前检查基础文件（文本编码器 / VAE）是否已下载——否则模型会“转完看不见”。
 * 转换列表、进度、失败原因（缺 adaln / dtype 不支持 / 目录提供方不给真实文件…）全部中英双语。
+
+### v11 · 导入模型删除 + 下载源切换
+* 模型选择器里，自己转换/导入的模型（`meta.json` 带 `"imported": true`）右侧多了 🗑：确认后如果是当前模型就先停服务器，再删 `files/anima/m_<id>/` 与 `files/sd/<id>.safetensors`，并清掉自定义名。
+* 模型页「Источник / Source」= 国内镜像 `hf-mirror`（默认）/ 官方 `huggingface.co` / 自定义 `…/resolve/main/` 地址。
+* 修回 v9/v10 的隐性回归：重编译 `MainTools` 把 `DEFAULT_BASE` 带成了上游源码的 `huggingface.co`，国内会拖慢目录加载；v11 起默认 `hf-mirror.com`，ADetailer 检测器地址与检查点转换的公共文件下载也跟随该设置。
 
 ### v10 · 温控交还系统 + SoC 温度 + 8 Elite
 * **不再由 App 暂停或降温**：删掉电池温度阈值滑杆、「太热也先出一张」开关、`waitCool()` 冷却等待、高温通知、队列/校准的热门禁，以及跑完后那句「已暂停：手机过热，请让其冷却」——它原本是出图完成之后又查了一次温度，属于误报。系统热等级提示保留，只提示不拦人。

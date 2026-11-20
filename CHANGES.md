@@ -5,6 +5,7 @@
 
 | 版本 | 服务版本 | APK | sha256（完整） |
 |---|---|---|---|
+| v11 | `1.9.5-v73+api11` | `HexAnima-1.9.5-v73-localapi-v11.apk` | `5264283e5fc7a1da916e532b16dec2a4ece5bb3c143efcc5f3b0299aadcfc62d` |
 | v10 | `1.9.5-v73+api10` | `HexAnima-1.9.5-v73-localapi-v10.apk` | `2d27d665bd3eacfef48a3cd3f545e6de88e1e088c10bef4fa2a07edfc0a27fba` |
 | v9 | `1.9.5-v73+api9` | `HexAnima-1.9.5-v73-localapi-v9.apk` | `9bf2fc16650bb6abf2292eda1f17fbf1ae1e7cc968c4bcb27bb7b07bee448e7f` |
 | v8 | `1.9.5-v73+api8` | `HexAnima-1.9.5-v73-localapi-v8.apk` | `f5df10dc31b3db2b51af3999a5c6f90442179920ebbd9438a2acd7f03a3fa8fb` |
@@ -14,6 +15,22 @@
 | v4 | `1.9.5-v73+api4` | `HexAnima-1.9.5-v73-localapi-v4.apk` | `7626cb8ba45d8e4601e3987ea17eee11f9a5f46e9f1a99036c0ce7fb8c84f907` |
 | v3 | `1.9.5-v73+api3d` | `HexAnima-1.9.5-v73-localapi-v3.apk` | `d1ead0a46cbafda39a25930b4bccdebf237d15559898f9ce34a111de04063297` |
 | v2 | `1.9.5-v73+api3` | `HexAnima-1.9.5-v73-localapi-v2.apk` | `56304bb73c9959c65af37c59e512e818dfc84edc074f7b1bce3dc567fc91c3d7` |
+
+---
+
+## v11 — 2026-11-20
+
+**自己转换 / 导入的模型可以删了**：模型选择器里，导入的模型（`meta.json` 里带 `"imported": true`）右侧多了一个 🗑。确认后：如果是当前模型就停掉服务器，删除 `files/anima/m_<id>/` 与 `files/sd/<id>.safetensors`，清掉自定义名，再回到选择器。目录里的模型仍然走「模型 → 删除」。
+
+**下载源可选**：模型页右上角「Источник / Source」改成三选一：
+
+| 选项 | 地址 |
+|---|---|
+| 国内镜像 · hf-mirror（默认） | `https://hf-mirror.com/ayanoby/anima-npu-packs/resolve/main/` |
+| 官方 · huggingface.co | `https://huggingface.co/ayanoby/anima-npu-packs/resolve/main/` |
+| 自定义地址 | 任意 `…/resolve/main/` 目录 |
+
+同时修回一个 v9/v10 的隐性回归：重编译 `MainTools` 时 `DEFAULT_BASE` 被带成了上游源码里的 `huggingface.co`，国内会拖慢/卡住目录加载；v11 起默认回到 `hf-mirror.com`。`MainRun` 的 ADetailer 检测器地址也改回 hf-mirror，转换本地检查点时的公共文件下载同样跟随「下载源」设置。
 
 ---
 
