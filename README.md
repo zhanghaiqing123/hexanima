@@ -50,6 +50,7 @@ ayanoby/hexanima                 原版：NPU 内核、模型包、App 本体（
 | v3 | `HexAnima-1.9.5-v73-localapi-v3.apk` | `1.9.5-v73+api3d` | 模型导出/导入、离线目录、检查点文件夹转换、模型页 MODEL BACKUP 卡片 |
 | v4 | `HexAnima-1.9.5-v73-localapi-v4.apk` | `1.9.5-v73+api4` | 上游 1.8.3 六项功能 + 备份界面中英双语 |
 | v5 | `HexAnima-1.9.5-v73-localapi-v5.apk` | `1.9.5-v73+api5` | 修复本地 `.safetensors` 转换识别 + 转换界面中文化 |
+| v13 | `HexAnima-1.9.5-v73-localapi-v13.apk` | `1.9.5-v73+api13` | 主机名重写补上大文件下载器 `ParDl.get`（v12 只改了 `Models.open`）；默认 hf-mirror.com（清风同款）+ com↔net 自动回退 |
 | v12 | `HexAnima-1.9.5-v73-localapi-v12.apk` | `1.9.5-v73+api12` | 下载源真正生效（主机名重写）：默认 hf-mirror.net，hf-mirror.com 会 308 跳官方；保留官方直连/自定义 |
 | v11 | `HexAnima-1.9.5-v73-localapi-v11.apk` | `1.9.5-v73+api11` | 导入/转换的模型可以删除；下载源三选一（hf-mirror 默认 / 官方 / 自定义） |
 | v10 | `HexAnima-1.9.5-v73-localapi-v10.apk` | `1.9.5-v73+api10` | 去掉 App 自带的温控暂停；RAM 条加 SoC 温度；QNN 2.51，支持 8 Elite / 8 Elite Gen 5（8 Gen 1 不再支持） |
@@ -237,7 +238,7 @@ data: {"type":"error","message":"..."}
 
 ---
 
-## 新增功能（v1 → v12）
+## 新增功能（v1 → v13）
 
 ### v1 · 本地接口
 8081 HTTP/SSE；反射驱动 App 自己的生成流程（同一套 UI 管线、同一份设置）。
@@ -273,6 +274,12 @@ v3/v4 的转换界面会把**任何**文件都判成 “not an Anima DiT”（�
 * 转换出的模型目录补写 `hdr.bin`（源文件的 safetensors 头），stub 由它生成，导出/再导入可以重建；
   另加 `.custom` 标记，并在转换前检查基础文件（文本编码器 / VAE）是否已下载——否则模型会“转完看不见”。
 * 转换列表、进度、失败原因（缺 adaln / dtype 不支持 / 目录提供方不给真实文件…）全部中英双语。
+
+### v13 · 补上大文件下载器的主机名重写
+* v12 只给 `Models.open()` 注入了 `Mirror.fix`，但**模型权重走 `ParDl.get()`**（并行分块下载器，自己开连接），所以大文件仍然去 huggingface.co，断梯子就卡 20 s × 6 次。
+* v13 同时注入 `Models.open()` 和 `ParDl.get()`；默认源改回 **hf-mirror.com**（清风版同款），并保留 hf-mirror.net / 官方直连 / 自定义。
+* 目录加载失败时自动在 com ↔ net 之间换一次。
+* 群友「清风版」的做法：基于 v10，在 `Models.open()` 和 `ParDl.get()` 各加一句 `replace("huggingface.co","hf-mirror.com")`，硬编码、无界面。
 
 ### v12 · 下载源真正生效（主机名重写）
 * 问题：`catalog6.json` 的 pack 地址是绝对 `https://huggingface.co/...`，`commonBase()` 又写死 `hf-mirror.com`；hf-mirror.com 现在 308 跳 huggingface.co，所以选什么源都会回到官方站，国内卡到超时（20 s 连接 / 30 s 读取 × 6 次 ≈ 1–3 分钟）。

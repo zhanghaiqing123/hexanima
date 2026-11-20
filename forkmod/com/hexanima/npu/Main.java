@@ -1550,8 +1550,15 @@ public class Main extends MainEdit {
         if (!p.getBoolean("base_migrated_v12", false)) {
             String b = p.getString("base", "");
             if (b.equals("https://hf-mirror.com/ayanoby/anima-npu-packs/resolve/main/") || b.equals("https://hf-mirror.com/ayanoby/anima-npu-packs/resolve/main"))
-                p.edit().putString("base", MainTools.DEFAULT_BASE).apply();
+                p.edit().putString("base", "https://hf-mirror.net/ayanoby/anima-npu-packs/resolve/main/").apply();
             p.edit().putBoolean("base_migrated_v12", true).apply();
+        }
+        // v13: the default goes back to hf-mirror.com (the mirror the Qingfeng build uses); v12 users sitting on the hf-mirror.net default move over.
+        if (!p.getBoolean("base_migrated_v13", false)) {
+            String b = p.getString("base", "");
+            if (b.equals("https://hf-mirror.net/ayanoby/anima-npu-packs/resolve/main/") || b.equals("https://hf-mirror.net/ayanoby/anima-npu-packs/resolve/main"))
+                p.edit().putString("base", MainTools.DEFAULT_BASE).apply();
+            p.edit().putBoolean("base_migrated_v13", true).apply();
         }
     }
 

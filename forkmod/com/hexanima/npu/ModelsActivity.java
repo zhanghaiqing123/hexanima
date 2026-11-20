@@ -61,15 +61,15 @@ public class ModelsActivity extends Base {
     }
     void sourceDialog() {
         final String cur = prefBase();
-        String[] n = {Tr.s(this, "Backup mirror · hf-mirror.net (recommended, works now)", "备用镜像 · hf-mirror.net（推荐，当前可用）"),
-                      Tr.s(this, "hf-mirror.com (currently answers 308 and redirects to huggingface.co)", "hf-mirror.com（当前会 308 跳转 huggingface.co）"),
+        String[] n = {Tr.s(this, "Domestic mirror · hf-mirror.com (recommended, the Qingfeng build uses it)", "国内镜像 · hf-mirror.com（推荐，清风同款）"),
+                      Tr.s(this, "Backup mirror · hf-mirror.net", "备用镜像 · hf-mirror.net"),
                       Tr.s(this, "Direct · huggingface.co (no mirror, needs a working connection)", "官方直连 · huggingface.co（不走镜像，需能直连）"),
                       Tr.s(this, "Custom URL (any Hugging Face-compatible mirror)", "自定义地址（任意 HF 兼容镜像）")};
-        int sel = cur.startsWith(NET) ? 0 : cur.startsWith(COM) ? 1 : cur.startsWith(OFFICIAL) ? 2 : 3;
+        int sel = cur.startsWith(COM) ? 0 : cur.startsWith(NET) ? 1 : cur.startsWith(OFFICIAL) ? 2 : 3;
         builder().setTitle(Tr.s(this, "Download source", "下载源")).setSingleChoiceItems(n, sel, (d, i) -> {
             d.dismiss();
-            if (i == 0) setBase(NET);
-            else if (i == 1) setBase(COM);
+            if (i == 0) setBase(COM);
+            else if (i == 1) setBase(NET);
             else if (i == 2) setBase(OFFICIAL);
             else {
                 final EditText e = field("https://…/resolve/main/"); e.setText(cur); e.setTextSize(13);
@@ -118,9 +118,32 @@ public class ModelsActivity extends Base {
         getSharedPreferences("anima", 0).edit().putString("base", base).apply();
         Mirror.set(base);   // mod: rewrite huggingface.co / hf-mirror.com URLs to the chosen mirror before any download
         io.submit(() -> {
-            try { final List<Models.Item> cat = store.catalog(base); Models.ensureMage(cat); Backup.saveCatalogAt(this, cat); for (Models.Item it : cat) store.refreshMeta(it); ui.post(() -> { items = cat; render(); }); }
-            catch (Exception e) { ui.post(() -> Backup.onCatalogError(this, e)); }
+            try {
+                List<Models.Item> cat;
+                try { cat = store.catalog(base); }
+                catch (Exception first) {   // mod: hf-mirror.com / hf-mirror.net are independent; when one does not answer, try the other once
+                    final String alt = altBase(base);
+                    if (alt == null) throw first;
+                    Mirror.set(alt);
+                    cat = store.catalog(alt);
+                    final String a = alt;
+                    ui.post(() -> {
+                        getSharedPreferences("anima", 0).edit().putString("base", a).apply();
+                        url.setText(a);
+                        Toast.makeText(this, Tr.s(this, "The mirror did not answer, switched to the other one", "镜像没有响应，已自动切换到另一个"), Toast.LENGTH_SHORT).show();
+                    });
+                }
+                Models.ensureMage(cat); Backup.saveCatalogAt(this, cat); for (Models.Item it : cat) store.refreshMeta(it);
+                final List<Models.Item> c = cat; ui.post(() -> { items = c; render(); });
+            } catch (Exception e) { ui.post(() -> Backup.onCatalogError(this, e)); }
         });
+    }
+
+    /** mod: the "other" preset mirror for the automatic fallback; official/custom are left alone */
+    static String altBase(String b) {
+        if (b.startsWith(COM)) return NET;
+        if (b.startsWith(NET)) return COM;
+        return null;
     }
 
     static String gb(long b) { return String.format("%.1f", b / 1e9); }

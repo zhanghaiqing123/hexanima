@@ -5,6 +5,7 @@
 
 | 版本 | 服务版本 | APK | sha256（完整） |
 |---|---|---|---|
+| v13 | `1.9.5-v73+api13` | `HexAnima-1.9.5-v73-localapi-v13.apk` | `13ee507fcc0b402d2daea4befccf2ca5373eebe45a67c52a2059fb7bf39c3dd7` |
 | v12 | `1.9.5-v73+api12` | `HexAnima-1.9.5-v73-localapi-v12.apk` | `bbc1cc78af32b0c168d0887ec3ef24bc5104db961719b39cea75f3e91b58d27e` |
 | v11 | `1.9.5-v73+api11` | `HexAnima-1.9.5-v73-localapi-v11.apk` | `2186fd4cc93d2382ce8e5ef3828d7cbab7ce0818d5969a058e0071cad4f88c48` |
 | v10 | `1.9.5-v73+api10` | `HexAnima-1.9.5-v73-localapi-v10.apk` | `2d27d665bd3eacfef48a3cd3f545e6de88e1e088c10bef4fa2a07edfc0a27fba` |
@@ -16,6 +17,22 @@
 | v4 | `1.9.5-v73+api4` | `HexAnima-1.9.5-v73-localapi-v4.apk` | `7626cb8ba45d8e4601e3987ea17eee11f9a5f46e9f1a99036c0ce7fb8c84f907` |
 | v3 | `1.9.5-v73+api3d` | `HexAnima-1.9.5-v73-localapi-v3.apk` | `d1ead0a46cbafda39a25930b4bccdebf237d15559898f9ce34a111de04063297` |
 | v2 | `1.9.5-v73+api3` | `HexAnima-1.9.5-v73-localapi-v2.apk` | `56304bb73c9959c65af37c59e512e818dfc84edc074f7b1bce3dc567fc91c3d7` |
+
+---
+
+## v13 — 2026-11-20
+
+**v12 修得不完整：大文件仍然走官方站。** `Models.open()` 只覆盖 catalog、manifest 和小文件；模型权重走的是 `ParDl.get()`（并行分块下载器），它自己开连接、用原始 URL。于是 v12 里「下载源」只对清单生效，权重还是 `huggingface.co`，断梯子必然卡到超时。
+
+群友的「清风版」正是把两处都改了：它在 `Models.open()` **和** `ParDl.get()` 开头各加了一句 `url.replace("huggingface.co", "hf-mirror.com")`，硬编码到 hf-mirror.com（基于我们的 v10，`+api10`，没有镜像选择界面）。
+
+v13：
+
+* `Mirror.fix(url)` 同时注入 `Models.open()` 与 `ParDl.get()`，两处都按所选源的 origin 重写主机名；
+* 默认源改回 **hf-mirror.com**（清风同款，实测当前可用：catalog 200、权重 Range 206）；
+* Source 四项：国内镜像 hf-mirror.com（推荐）/ 备用镜像 hf-mirror.net / 官方直连 huggingface.co / 自定义；
+* 目录加载失败时自动在 com ↔ net 之间回退一次（官方/自定义不参与）；
+* 迁移：v12 默认的 `hf-mirror.net` 在 v13 首次运行改回 hf-mirror.com（`base_migrated_v13`），用户自己选的不动。
 
 ---
 

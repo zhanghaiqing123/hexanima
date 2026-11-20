@@ -51,7 +51,7 @@ abstract class MainTools extends MainRun {
     volatile double appGb; volatile boolean appBusy;
     int tick;
     abstract void refreshState();
-    static final String DEFAULT_BASE = "https://hf-mirror.net/ayanoby/anima-npu-packs/resolve/main/";   // mod: hf-mirror.com redirects to huggingface.co now; Models -> Source still offers it, the official host and a custom URL
+    static final String DEFAULT_BASE = "https://hf-mirror.com/ayanoby/anima-npu-packs/resolve/main/";   // mod: the mirror the Qingfeng build uses; the Source dialog still offers hf-mirror.net, the official host and a custom URL
     static final String[][] PALETTE = {
         {"Calidad|Quality", "masterpiece", "best quality", "very aesthetic", "absurdres", "highres", "newest", "detailed", "score_9"},
         {"Encuadre|Framing", "portrait", "upper body", "cowboy shot", "full body", "close-up", "looking at viewer", "from above", "from below", "from side", "dutch angle", "wide shot"},
