@@ -76,6 +76,11 @@ abstract class MainRun extends MainLora {
     String cfgOv; int stepsOv, cutOv;
     List<String> tagLoras = new ArrayList<>();
     volatile File varInit; int countOv;   // one batch of "similar variations": its init picture; one batch with its own picture count
+    // mod: hires redo ("Hires fix 放大重绘" of a picture from the album or the history) — the same init channel as "similar variations", but with
+    // its own strength (the hires denoise) and with the automatic hires pass switched off, since this run IS the second pass
+    float varInitStr = .45f; boolean noAutoHires; String hiresFromName;
+    File pendRedo; float pendRedoStr = .45f; int pendRedoSteps; String pendRedoName; boolean armNext;   // armed only when generate() really starts
+    int redoOldW, redoOldH, redoNewW, redoNewH; boolean redoRestoreRes;   // the size the user had before a hires redo: put back when it ends
     abstract File adDir();
     abstract File adModel();
     abstract File loraSrc();
@@ -203,7 +208,7 @@ abstract class MainRun extends MainLora {
         final int[] base = count();
         // img2img ("Edit a photo", similar variations): sd.cpp runs only the last steps*strength steps, and the CFG ones among them are what is left of the CFG part
         final int stepsAll = stepsOv > 0 ? stepsOv : Settings.steps(this);
-        final File i2iSrc = varInit != null ? varInit : initSrc(); final float i2iStr = varInit != null ? 0.45f : pf("x_strength", .6f);
+        final File i2iSrc = varInit != null ? varInit : initSrc(); final float i2iStr = varInit != null ? varInitStr : pf("x_strength", .6f);
         final int steps = i2iSrc.exists() ? Math.max(1, Math.min(stepsAll, (int) (stepsAll * i2iStr))) : stepsAll;
         final int cfgRun = cfgOnNow() ? Math.max(0, Settings.cfgSteps(stepsAll, cutNow()) - (stepsAll - steps)) : 0;
         final int calls = Math.max(1, (steps + cfgRun) * (Settings.twoCalls(Settings.sampler(this)) ? 2 : 1));   // animad logs one "step" line per DiT call: CFG / 2nd-order samplers make several per step
@@ -255,6 +260,7 @@ abstract class MainRun extends MainLora {
             JSONObject meta = new JSONObject().put("prompt", fullPrompt).put("seed", seedS).put("w", w).put("h", h).put("model", modelName()).put("id", model).put("sec", (System.currentTimeMillis() - t0) / 1000.0)
                 .put("steps", stepsAll).put("cfg", cfgNow()).put("sampler", Settings.sampler(this)).put("scheduler", Settings.scheduler(this));
             if (cfgOnNow() && !Settings.negative(this).isEmpty()) meta.put("negative", Settings.negative(this));
+            if (hiresFromName != null) meta.put("upscaled_from", hiresFromName).put("hires_redo", true).put("hires_denoise", varInitStr);   // mod: a manual hires redo
             if (loraOn() && loraFitsModel()) meta.put("lora", prefs().getString("anima_lora_name", "LoRA")).put("lora_strength", loraStr());
             if (cfgOnNow()) meta.put("neg", Settings.negative(this));
             { JSONArray res = new JSONArray(); if (loraOn() && loraFitsModel()) res.put(loraSrc().getPath() + "*" + String.format(java.util.Locale.US, "%.2f", loraStr())); for (String t : tagLoras) res.put(t); if (res.length() > 0) meta.put("res", res); }   // LoRA files for the PNG text (hashes, Civitai ids)
@@ -551,6 +557,8 @@ abstract class MainRun extends MainLora {
         try { adDir().mkdirs(); File out = new File(adDir(), "face_yolov8n.safetensors"); Models.fetch(AD_URL, out, -1, AD_SHA, null, new java.util.concurrent.atomic.AtomicBoolean()); ui.post(this::refreshExtras); return out; }
         catch (Exception e) { ui.post(() -> Toast.makeText(this, "ADetailer: " + e.getMessage(), Toast.LENGTH_LONG).show()); return null; }
     }
+    /** mod: the automatic second pass is off for a manual hires redo (that run already IS the second pass) */
+    boolean hiresWanted() { return !noAutoHires && prefs().getBoolean("x_hires", false); }
     /** hires target: about scale × the size, sides multiples of 16 with a patch count the NPU blocks run (multiple of 32, at most 6144) */
     int[] hiresSize(int w, int h) {
         double s = Math.max(1.0, Math.min(3.0, pf("x_hires_scale", 1.5f)));
@@ -576,7 +584,7 @@ abstract class MainRun extends MainLora {
     /** INIT / STRENGTH / MASK for anima.sh */
     String initEnv(int w, int h) {
         File init = initFor(w, h); if (init == null) return "";
-        String e = "INIT=" + q(init.getPath()) + " STRENGTH=" + (varInit != null ? "0.45" : pf("x_strength", .6f)) + " ";
+        String e = "INIT=" + q(init.getPath()) + " STRENGTH=" + (varInit != null ? String.format(java.util.Locale.US, "%.3f", varInitStr) : pf("x_strength", .6f)) + " ";
         File m = varInit != null ? null : maskFor(w, h); if (m != null) e += "MASK=" + q(m.getPath()) + " ";
         return e;
     }
@@ -598,12 +606,12 @@ abstract class MainRun extends MainLora {
     String extrasEnv(int w, int h, long t0) {
         StringBuilder e = new StringBuilder();
         if (prefs().getBoolean("x_preview", true)) e.append("PREVIEW=").append(q(previewFile().getPath())).append(" ");
-        if (availMb() < 3000 && prefs().getBoolean("x_hires", false)) {   // the larger passes need room: skip them rather than swap
+        if (availMb() < 3000 && hiresWanted()) {   // the larger passes need room: skip them rather than swap
             ui.post(() -> Toast.makeText(this, L.s("Мало памяти: hires fix пропущен для этой картинки", "Low memory: hires fix skipped for this picture"), Toast.LENGTH_LONG).show());
             e.append(initEnv(w, h));
             return e.toString();
         }
-        if (prefs().getBoolean("x_hires", false)) {
+        if (hiresWanted()) {
             int[] hs = hiresSize(w, h);
             if (hs != null) e.append("HIRES=1 HIRES_W=").append(hs[0]).append(" HIRES_H=").append(hs[1]).append(" HIRES_DENOISE=").append(pf("x_hires_den", .45f)).append(" HIRES_STEPS=").append((int) pf("x_hires_steps", 4)).append(" ");
             else ui.post(() -> Toast.makeText(this, L.s("Hires fix: этот размер уже максимальный для NPU", "Hires fix: this size is already the NPU's largest"), Toast.LENGTH_LONG).show());

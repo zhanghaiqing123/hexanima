@@ -161,6 +161,7 @@ abstract class MainTools extends MainRun {
     };
     EditText seed, wEdit, hEdit;
     abstract void generate(boolean newSeed);
+    abstract void scrollToHires();   // mod: the menu item scrolls the screen to the Hires fix card
     abstract void openModels();
     abstract void refreshModels();
     abstract void setModel(String m);
@@ -286,6 +287,7 @@ abstract class MainTools extends MainRun {
         items.add("Civitai"); acts.add(() -> startActivityForResult(new Intent(this, CivitaiActivity.class), 14));
         items.add(L.s("Plantillas de configuración", "Configuration templates")); acts.add(this::presets);
         items.add(L.s("Ampliar una imagen de la galería", "Enlarge a picture from the gallery")); acts.add(() -> pickImage(REQ_UPSCALE_PICK));
+        items.add(Tr.s(this, "Hires fix: enlarge and redraw a picture", "Hires fix 放大重绘图片")); acts.add(this::scrollToHires);   // mod: jumps to the EXTRAS card
         if (Tagger.supported()) { items.add(L.s("Prompt desde una imagen", "Prompt from a picture")); acts.add(this::promptFromPicture); }
         items.add(L.s("Открыть настройки из PNG", "Load settings from a PNG")); acts.add(() -> startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT).setType("image/png").addCategory(Intent.CATEGORY_OPENABLE), 8));
         items.add(Tr.s(this, "Time calibration", "时间校准")); acts.add(((Main) this)::calibrateDialog);

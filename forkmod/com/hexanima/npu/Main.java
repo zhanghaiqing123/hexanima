@@ -53,6 +53,7 @@ public class Main extends MainEdit {
     final Object batchLock = new Object();
     volatile boolean batchAdjustable;
     boolean statusSeen;
+    ScrollView mainScroll;   // mod: the menu item "Hires fix: enlarge and redraw a picture" scrolls this to the EXTRAS card
 
     LinearLayout customRow, imgBox;
     Button loadBtn, genBtn, countBtn;
@@ -118,6 +119,7 @@ public class Main extends MainEdit {
         root.setPadding(dp(16), dp(12), dp(16), dp(20));
         sv.addView(root, new ViewGroup.LayoutParams(-1, -2));
         frame.addView(sv, new LinearLayout.LayoutParams(-1, 0, 1));
+        mainScroll = sv;
 
         // header: title, history, menu
         LinearLayout tr = new LinearLayout(this);
@@ -650,6 +652,36 @@ public class Main extends MainEdit {
         saved.setText(m.has("grid") ? L.f("Última cuadrícula · %d imágenes", "Last grid · %d pictures", m.optInt("count", 0)) : m.optBoolean("compare") ? L.s("Última comparación", "Last comparison") : L.f("Última imagen · seed %s", "Last image · seed %s", m.optString("seed", "?")));
     }
 
+    /** mod: the hires redo arms its init picture, strength and steps only when generate() gets past its checks, so a cancelled
+     *  low-memory dialog can not leave them behind for the next normal picture */
+    void armRedo() {
+        if (!armNext || pendRedo == null) return;
+        varInit = pendRedo; varInitStr = pendRedoStr; noAutoHires = true; hiresFromName = pendRedoName;
+        stepsOv = Math.max(1, pendRedoSteps); countOv = 1;
+        pendRedo = null;
+    }
+    /** mod: "..." > Hires fix: enlarge and redraw a picture — open the EXTRAS card and scroll the window down to the Hires fix row (no new screen) */
+    void scrollToHires() {
+        if (isMoss() || isQwen() || isMage() || model.isEmpty()) { Toast.makeText(this, Tr.s(this, "The hires fix works with Anima models only", "Hires fix 只对 Anima 模型有效"), Toast.LENGTH_LONG).show(); return; }
+        prefs().edit().putBoolean("fold_extras", true).apply();
+        if (extFold != null) { extFold.body.setVisibility(View.VISIBLE); extFold.chev.setText("▴"); }
+        refreshExtras();
+        final View target = hiresRow != null ? hiresRow : extrasBox;
+        if (target == null || mainScroll == null) return;
+        target.post(() -> {
+            int y = 0; View v = target;
+            while (v != null && v != mainScroll) { y += v.getTop(); android.view.ViewParent p = v.getParent(); v = p instanceof View ? (View) p : null; }
+            mainScroll.smoothScrollTo(0, Math.max(0, y - dp(96)));
+            flashCard(target);
+        });
+    }
+    /** a short accent flash so the eye finds the card that was jumped to */
+    void flashCard(final View v) {
+        final android.graphics.drawable.Drawable old = v.getBackground();
+        v.setBackground(bg(0x33FFFFFF, 14));
+        ui.postDelayed(() -> v.setBackground(old), 1200);
+    }
+
     /** every 2 s: RAM strip, thermal / battery / chip warnings; every 10 s the model state (the idle watchdog may have unloaded it) */
 
     @Override protected void onActivityResult(int req, int res, Intent d) {
@@ -699,6 +731,12 @@ public class Main extends MainEdit {
         }
         if (req == 9 && res == RESULT_OK && d != null && d.getData() != null) { importLora(d.getData()); return; }
         if (req == 16 && res == RESULT_OK && d != null && d.getData() != null) { importQwenSafetensors(d.getData()); return; }
+        if (req == REQ_HIRES_PICK) {
+            if (res != RESULT_OK || d == null || d.getData() == null) return;
+            final android.net.Uri u = d.getData();
+            ex2.submit(() -> { try { final File f = importPicked(u, "picked_hires.png"); ui.post(() -> hiresRedoDialog(f, null)); } catch (Exception e) { ui.post(() -> Toast.makeText(this, String.valueOf(e.getMessage()), Toast.LENGTH_LONG).show()); } });
+            return;
+        }
         if (req == 11 && res == RESULT_OK && d != null && d.getData() != null) { importInit(d.getData()); return; }
         if (req == 12 && res == RESULT_OK && d != null && d.getData() != null) { importAd(d.getData()); return; }
         if (req == 13 && res == RESULT_OK && d != null && d.getData() != null) { importCheckpoint(d.getData()); return; }
@@ -1685,6 +1723,7 @@ public class Main extends MainEdit {
                 .setNegativeButton(L.s("Отмена", "Cancel"), null).show();
             return;
         }
+        armRedo();   // mod: the hires redo takes over here, once this run is going to happen
         final String pr = pr0;
         String sd = seed.getText().toString().trim();
         final boolean randomSeed = newSeed || sd.isEmpty() || sd.equals("-1");   // -1 = random; the seed used is shown under the picture
@@ -1756,7 +1795,8 @@ public class Main extends MainEdit {
                 final Bitmap gb = gf != null ? BitmapFactory.decodeFile(gf.getPath()) : null;
                 if (gb != null) { lastBm = gb; ui.post(() -> { batchGridFile = gf; extraGrids.clear(); extraGrids.addAll(gs.subList(1, gs.size())); batchDisplayIndex = batchFiles.size(); lastFile = gf; img.setImageBitmap(gb); showImg(true); placeholder.setVisibility(View.GONE); saved.setText(gs.size() > 1 ? L.f("Cuadrícula 1/%d · %d imágenes · ‹ › para ver más", "Grid 1/%d · %d pictures · ‹ › for more", gs.size(), madeFiles.size()) : L.f("Cuadrícula · %d imágenes", "Grid · %d pictures", madeFiles.size())); refreshGeneratedEditAction(); }); }
             }
-            picStart = 0; varInit = null;
+            picStart = 0; varInit = null; noAutoHires = false; varInitStr = .45f; hiresFromName = null;   // mod: the hires redo applies to one run only
+            new File(getFilesDir(), "hires_src.png").delete();
             final double sec = (System.currentTimeMillis() - t0) / 1000.0;
             final boolean wasCancelled = cancelled, okAny = made > 0;
             final int total = made;
@@ -1774,6 +1814,10 @@ public class Main extends MainEdit {
                 setModelUi(loaded, false, "");
                 if (calibrating) { if (okAny && !wasCancelled) ui.postDelayed(Main.this::calibNext, 600); else finishCalibration(false); }
                 if (okAny && !visible) notifyDone(app, nb, pr, total);
+                if (redoRestoreRes) {   // mod: a hires redo changed the size for one picture only: give the user's size back
+                    redoRestoreRes = false;
+                    if (resW == redoNewW && resH == redoNewH) setRes(redoOldW, redoOldH);
+                }
                 Runnable next = afterGen; afterGen = null;
                 if (next != null && okAny && !wasCancelled) next.run();   // the queue goes on: the phone's own thermal framework handles the heat
             });
