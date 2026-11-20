@@ -24,8 +24,6 @@ ayanoby/hexanima                 原版：NPU 内核、模型包、App 本体（
 > 仓库同时保留上游 ayanoby/hexanima 的源码树（`app/`、`chainrun/`、`docs/` 等，MIT）作为参考；
 > 本项目的构建使用的是 GrimmDev `1.9.5-v73` 的源码（见[自己重新打包](#自己重新打包)）。
 
-**一切功劳归上游。** 如果你觉得这个 App 好用，请去给 [ayanoby](https://github.com/ayanoby) 和 [GrimmDev-Glitch](https://github.com/GrimmDev-Glitch) 点 star。
-
 ---
 
 ## 目录
