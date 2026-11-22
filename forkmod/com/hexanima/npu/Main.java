@@ -61,6 +61,7 @@ public class Main extends MainEdit {
     TextView loraAuto, strLabel;   // mod: the LoRAs the next picture adds by itself, and which LoRA the strength slider edits
     final Runnable loraTick = () -> { if (loraName != null) refreshLora(); };   // debounced: the summary follows the prompt without reading the library on every key
     LinearLayout sampBox, negBox, mossStepsBox; EditText negEdit, stepsEdit, cfgEdit; Button samplerBtn, schedBtn, cutBtn, mossStepsBtn; TextView sampNote;
+    MainTr trMod; View trBox;   // mod: 翻译卡片（在提示词和反向提示词之间）
     LinearLayout pageBar, imgTools;   // ‹ 2 / 3 › over a batch picture (swiping needs a quick fling; the buttons always work)
     TextView pageTag;   // "2 / 3" over a batch picture: the caption under a tall picture is off screen
     TextView clearX;   // small ✕ over the shown picture: back to the placeholder (the picture stays in the History)
@@ -346,6 +347,11 @@ public class Main extends MainEdit {
         tokText = text("", 12, DIM, false); tokText.setGravity(Gravity.END); tokText.setPadding(0, 0, dp(6), 0);
         tb.addView(tokText, new LinearLayout.LayoutParams(0, -2, 1));
         root.addView(tb, new LinearLayout.LayoutParams(-1, -2));
+
+        // mod: 翻译卡片（中文 → 英文），夹在提示词框和反向提示词框之间；翻出来的英文整段写进 prompt
+        trMod = new MainTr(this);
+        trBox = trMod.build();
+        root.addView(trBox, new LinearLayout.LayoutParams(-1, -2));
         prompt.addTextChangedListener(watch(s -> { countTokens(); ui.removeCallbacks(loraTick); ui.postDelayed(loraTick, 600); }));
         countTokens();
 
@@ -577,7 +583,7 @@ public class Main extends MainEdit {
         root.removeView(ramTxt); if (loadBtn.getParent() != null) ((ViewGroup) loadBtn.getParent()).removeView(loadBtn);
         ramRow.addView(ramTxt, new LinearLayout.LayoutParams(0, -2, 1));
         LinearLayout.LayoutParams lbl = new LinearLayout.LayoutParams(-2, dp(40)); lbl.leftMargin = dp(8); ramRow.addView(loadBtn, lbl);   // load / free stays in sight under the model
-        View[] order = {tr, warnTxt, head, ramRow, ramBar, state, imgTools, imgBox, resRow, pl, prompt, tb, negBox, sampBox, mossStepsBox, editBox, animaInitBox, qwenLoraBox, loraBox, extrasBox, imageSet};
+        View[] order = {tr, warnTxt, head, ramRow, ramBar, state, imgTools, imgBox, resRow, pl, prompt, tb, trBox, negBox, sampBox, mossStepsBox, editBox, animaInitBox, qwenLoraBox, loraBox, extrasBox, imageSet};
         java.util.List<View> rest = new java.util.ArrayList<>();
         for (int i = 0; i < root.getChildCount(); i++) { View v = root.getChildAt(i); if (!java.util.Arrays.asList(order).contains(v)) rest.add(v); }
         root.removeAllViews(); for (View v : order) root.addView(v); for (View v : rest) root.addView(v);
@@ -608,6 +614,7 @@ public class Main extends MainEdit {
         super.onPause();
         visible = false;
         ui.removeCallbacks(ramTick);
+        if (trMod != null) trMod.stopEngineForGeneration();
         if (!skipSave) prefs().edit().putString("prompt", prompt.getText().toString()).putString("seed", seed.getText().toString()).putString("model", model).putInt("w", resW).putInt("h", resH).apply();   // a template just wrote its own values: keep them
     }
 
@@ -707,6 +714,10 @@ public class Main extends MainEdit {
             return;
         }
         if (req == Corrections.REQ && res == RESULT_OK) { prefs().edit().remove("hidden_last").apply(); lastFile = null; restoreLatestGenerated(); return; }   // the corrected picture is the newest one
+        if ((req == MainTr.REQ_DICT || req == MainTr.REQ_PACK) && res == RESULT_OK && d != null && d.getData() != null) {   // mod: 翻译的用户词典 / 模型包
+            if (trMod != null) { if (req == MainTr.REQ_DICT) trMod.importUserDict(d.getData()); else trMod.importPack(d.getData()); }
+            return;
+        }
         if (req == 14 && res == RESULT_OK && d != null) {
             appendPromptWords(d.getStringExtra("moss_triggers"));
             String qid = d.getStringExtra("qwen_fold");   // a Qwen LoRA downloaded from Civitai: convert it here, on the phone
@@ -1701,6 +1712,7 @@ public class Main extends MainEdit {
         return r;
     }
     void generate(boolean newSeed) {
+        if (trMod != null) trMod.stopEngineForGeneration();   // mod: 生图前把本地翻译引擎卸掉，别和 NPU 模型抢内存
         if (model.isEmpty()) { openModels(); return; }
         int cw = 0, ch = 0;
         try { cw = Integer.parseInt(wEdit.getText().toString().trim()); ch = Integer.parseInt(hEdit.getText().toString().trim()); } catch (NumberFormatException e) { }

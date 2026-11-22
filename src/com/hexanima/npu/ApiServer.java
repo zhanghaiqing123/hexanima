@@ -58,7 +58,7 @@ import java.util.concurrent.TimeUnit;
  */
 public final class ApiServer {
 
-    public static final String VERSION = "1.9.5-v73+api16";
+    public static final String VERSION = "1.9.5-v73+api25";
     private static final String TAG = "HexAnimaApi";
     private static final int PORT = 8081;
     private static final int LOG_MAX = 400;

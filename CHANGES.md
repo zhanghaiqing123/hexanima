@@ -5,6 +5,7 @@
 
 | 版本 | 服务版本 | APK | sha256（完整） |
 |---|---|---|---|
+| v25 | `1.9.5-v73+api25` | `HexAnima-1.9.5-v73-localapi-v25.apk` | `8561f66d10ee22fdbab3feddb25b83674ed96891e60e076e2146582452035ed9` |
 | v16 | `1.9.5-v73+api16` | `HexAnima-1.9.5-v73-localapi-v16.apk` | `5a358012fa8891993857f6297b7c40baf3f70a8ce013ec39a990688031a90f0a` |
 | v15 | `1.9.5-v73+api15` | `HexAnima-1.9.5-v73-localapi-v15.apk` | `6164db685ec8e0915d0d2f305119e0b9e4a6c844b688c14dd6a19e400cc2fda4` |
 | v14 | `1.9.5-v73+api14` | `HexAnima-1.9.5-v73-localapi-v14.apk` | `abb3938781cdd78c2daa1ca65c40f6975db34c4099494ada87d59610e6604dd2` |
@@ -22,6 +23,39 @@
 | v2 | `1.9.5-v73+api3` | `HexAnima-1.9.5-v73-localapi-v2.apk` | `56304bb73c9959c65af37c59e512e818dfc84edc074f7b1bce3dc567fc91c3d7` |
 
 ---
+
+## v25 — 2026-11-23
+
+**翻译：把中文提示词变成英文。** 提示词框和反向提示词框之间多了一张可折叠的翻译卡片（第一次装默认展开），四档引擎，随时切换：
+
+1. **内置词典**：`assets/tr_dict.tsv`，danbooru 标签的中英对照 23,057 条，最长匹配换成标准标签（`银发` → `silver_hair`，不是 `silver hair`）；只动中文片段，括号、权重、`<lora:…>`、数字、已有英文原样保留。
+2. **ML Kit 离线**（`com.google.mlkit:translate`，35 MB）：模型按需从 Google 下载，一次之后永久离线。
+3. **Hy-MT 本地**（腾讯混元 1.8B，1.25bit，440 MB）：llama.cpp + STQ 内核，编成常驻进程 `hymt-serve`，点输入框才挂载、点生成立刻卸载，不跟 NPU 模型抢内存。
+4. **云端 LLM**（OpenAI 兼容）：模型拉取/手填、温度、最大输出、**思考强度**（DeepSeek 默认低，自动翻译成各家的 `thinking` / `enable_thinking` / `reasoning_effort`）、附加 JSON；失败自动回退本地引擎。
+
+翻译方式：
+
+* 输入中文停手 500 ms 自动翻（**云端模式下禁用即时翻译**，避免每打一个字就发一次付费请求）；
+* 结果**整段替换**提示词框；
+* 标签式输入（`银发, 红瞳, 微笑`）先走词典，命中率 100% 时不调用任何模型；出现句子才交给 ML Kit / Hy-MT / 云端。
+
+模板系统（云端用）：
+
+* **极简**：系统提示词 + 用户提示词两个框，`$1` 表示翻译框内容；
+* **高级**：直接写 `messages` 数组 JSON，App 不注入任何身份，`$1` 可出现在任意 content 里（可多次），右上角 ❔ 有写法说明；
+* 模板可新建/重命名/编辑/删除，列表带 `[极简]`/`[高级]` 标记。
+
+设置面板是**就地浮层**（不是对话框）：顶部 `⬅` 返回上一层、`✕` 退出，点外面不关闭，返回键只退一层，换页 170 ms 滑入动画；输入法由同窗口的 EditText 直接弹出。
+
+工程要点（重新打包时会遇到）：
+
+* 基线是上一版 APK 完整解码（`apktool d`，不能带 `-r`），容器是 aarch64 要用 `apktool_arm.jar` 里那份 aarch64 aapt2（x86_64 的会 SIGILL），并用 shim 过滤它不认的 `--no-compile-sdk-metadata`。
+* ML Kit 的 24 个依赖 artifact 一起 d8 进主 dex（方法数 4,225 → 26,4xx），16.4 MB 的 `libtranslate_jni.so` 进 `lib/arm64-v8a/`；`R.raw` 改成读 assets，缺失的 R 类补 0 值 stub；**不注册 `MlKitInitProvider`**，初始化懒加载，失败只降级不影响启动。
+* Hy-MT：`work/android-toolchain/` 是用 Debian clang + NDK sysroot 交叉编译 llama.cpp 的包装脚本（没有官方 aarch64 NDK）；模型是 GGUF，类型编号与上游 PR #22836 差一位，需要在 `ggml.h` 里把 `STQ1_0` 设成 42。
+* 模型下载：hf-mirror 优先、断点续传、sha256 校验；文件名固定 `model-125.gguf`，并会自动接管旧的 `model.gguf`，**升级不用重下**。
+* 共用模型文件（`files/anima/vae.bin` 等）如果损坏会导致所有模型加载失败，设置 → 修复与自检里有「修复共用模型文件」（删安装标记 + 坏文件，下次下载自动补回）。
+
+许可提醒：Hy-MT1.5 用的是腾讯 HY 社区许可（不适用于欧盟/英国/韩国；商用 1 亿 MAU 门槛）。ML Kit 为 Google 的服务条款。
 
 ## v16 — 2026-11-21
 

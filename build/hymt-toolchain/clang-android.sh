@@ -1,0 +1,2 @@
+#!/bin/sh
+exec /usr/bin/clang --target=aarch64-linux-android29 --sysroot=/tmp/ndk/android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/sysroot -L/tmp/androidlibs -L/tmp/ndk/android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/29 -L/tmp/ndk/android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/lib/clang/18/lib/linux/aarch64 -rtlib=compiler-rt --unwindlib=libunwind -fuse-ld=lld "$@"
