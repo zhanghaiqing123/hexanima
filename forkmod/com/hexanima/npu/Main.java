@@ -569,7 +569,7 @@ public class Main extends MainEdit {
         brow.addView(countBtn, cb);
         genBtn = button("", ACC, ON_ACC);
         genBtn.setTextSize(17);
-        genBtn.setOnClickListener(v -> { if (busy) stopAsk(); else generate(false); });
+        genBtn.setOnClickListener(v -> { if (busy) stopAsk(); else { scrollTop(); generate(false); } });
         brow.addView(genBtn, new LinearLayout.LayoutParams(0, dp(54), 1));
         bottom.addView(brow);
         frame.addView(bottom, new LinearLayout.LayoutParams(-1, -2));
@@ -714,8 +714,12 @@ public class Main extends MainEdit {
             return;
         }
         if (req == Corrections.REQ && res == RESULT_OK) { prefs().edit().remove("hidden_last").apply(); lastFile = null; restoreLatestGenerated(); return; }   // the corrected picture is the newest one
-        if ((req == MainTr.REQ_DICT || req == MainTr.REQ_PACK) && res == RESULT_OK && d != null && d.getData() != null) {   // mod: 翻译的用户词典 / 模型包
-            if (trMod != null) { if (req == MainTr.REQ_DICT) trMod.importUserDict(d.getData()); else trMod.importPack(d.getData()); }
+        if ((req == MainTr.REQ_DICT || req == MainTr.REQ_CSV || req == MainTr.REQ_PACK) && res == RESULT_OK && d != null && d.getData() != null) {   // mod: 翻译词典 / danbooru CSV / 模型包
+            if (trMod != null) {
+                if (req == MainTr.REQ_DICT) trMod.importDict(d.getData(), false);
+                else if (req == MainTr.REQ_CSV) trMod.importDict(d.getData(), true);
+                else trMod.importPack(d.getData());
+            }
             return;
         }
         if (req == 14 && res == RESULT_OK && d != null) {
@@ -1454,6 +1458,13 @@ public class Main extends MainEdit {
     /** key of the measured time per model, size, edit / text-to-image and (Anima) step count */
     String timeKey() { return "t_" + model + "_" + resW + "x" + resH + (editBm != null && (isQwen() || isMage()) ? "_e" : "") + (isMoss() || isQwen() || isMage() ? "" : "_" + Settings.calls(this)); }
     /** rough time to a picture: the catalog speed at 512x768 scaled by the patch count, times the number of pictures */
+    /** 点「生成」先平滑滚回顶部：进度、状态都在上面，不滚回去用户看不到（已经在顶部就不动） */
+    private void scrollTop() {
+        final ScrollView sv = mainScroll;
+        if (sv == null || sv.getScrollY() <= 0) return;
+        sv.smoothScrollTo(0, 0);
+    }
+
     String genLabel() {
         if (model.isEmpty()) return L.s("Скачать модель", "Get a model");
         long est = estSec() * count;

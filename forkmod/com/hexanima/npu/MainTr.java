@@ -7,9 +7,13 @@ import android.os.Environment;
 import android.provider.MediaStore;
 import android.view.Gravity;
 import android.view.View;
+import android.view.ViewGroup;
+import android.widget.BaseAdapter;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.LinearLayout;
+import android.widget.ListView;
+import android.widget.PopupWindow;
 import android.widget.Switch;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -30,23 +34,40 @@ import java.util.zip.ZipOutputStream;
 
 /** 翻译卡片：夹在提示词框和反向提示词框之间，可折叠。
  *
- *  输入中文 → 自动翻成英文并**整段替换**提示词框（实时模式下每改一个字都会重填，所以必须先清空旧的）；
- *  关闭「即时」后只有点「翻译」才动。词典开 = 先用内置/用户词表换标准标签，剩下的才交给 ML Kit；
- *  词典关 = 纯 ML Kit。 */
+ *  输入中文 → 自动翻成英文并**整段替换**提示词框（即时模式下每改一个字都会重填，所以必须先清空旧的）。
+ *
+ *  第一行是三档：关 / 即时 / 仅词典
+ *    · 关     ：只有点「翻译」才动；
+ *    · 即时   ：500 ms 防抖后走当前引擎（云端禁用这一档，每打一个字就是一次付费请求）；
+ *    · 仅词典 ：防抖后只做词典替换，不碰任何模型，未命中的段原样留中文。
+ *
+ *  词典开关打开时，所有引擎都先经过同一条流水线（TrEngine.plan）：能整段被词条覆盖的段直接出标签，
+ *  剩下的段才交给当前引擎 —— ML Kit / Hy-MT / 云端都一样。 */
 final class MainTr {
-    static final int REQ_DICT = 41, REQ_PACK = 42;
+    static final int REQ_DICT = 41, REQ_PACK = 42, REQ_CSV = 43;
 
     private final Main m;
     EditText in;
     private TextView status;
-    private Switch autoSw, dictSw;
-    private Button engBtn;   // 引擎切换：ML Kit ⇄ 本地 Hy-MT
+    private Switch dictSw;
+    private Button mOff, mLive, mDict;
+    private Button engBtn;   // 引擎切换：ML Kit / 本地 Hy-MT / 云端
     View box;
     private MainLora.Fold fold;
 
+    // 输入联想：边打中文边列出词典里包含这个词的条目，点一下就换成那个词（中文，不换成英文）。
+    // 用 PopupWindow 而不是塞在卡片里：它是独立窗口，列表的滑动不会传给主界面的 ScrollView
+    private PopupWindow assocPopup;
+    private ListView assocListView;
+    private BaseAdapter assocAdapter;
+    private final ArrayList<String[]> assocRows = new ArrayList<>();
+    private boolean assocSuppress;                 // 点选后 setText 会再触发一次搜索，跳过它
+    private final Runnable assocTick = () -> doAssoc();
+
     private int seq;                 // 过期的翻译结果直接丢掉
-    private boolean autoSilent;      // 程序性切换即时开关时，不要把 off 写进设置
+    private boolean autoSilent;      // 程序性改动开关/档位时，不要把值写回设置
     static final String ENG_MLKIT = "mlkit", ENG_LOCAL = "local", ENG_CLOUD = "cloud";
+    static final String MODE_OFF = "off", MODE_LIVE = "live", MODE_DICT = "dict";
     String engine() { return m.prefs().getString("tr_engine", ENG_MLKIT); }
     void setEngine(String e) { m.prefs().edit().putString("tr_engine", e).apply(); }
     private final Runnable tick = () -> doTranslate(false);
@@ -55,6 +76,22 @@ final class MainTr {
 
     private boolean pref(String k, boolean d) { return m.prefs().getBoolean("tr_" + k, d); }
     private void setPref(String k, boolean v) { m.prefs().edit().putBoolean("tr_" + k, v).apply(); }
+
+    /** 三档；老版本只有一个「即时」开关，第一次读时迁移过来 */
+    private String mode() {
+        String md = m.prefs().getString("tr_mode", "");
+        if (md.isEmpty()) {
+            md = pref("auto", true) ? MODE_LIVE : MODE_OFF;
+            m.prefs().edit().putString("tr_mode", md).apply();
+        }
+        return md;
+    }
+    private void setMode(String md) {
+        if (md.equals(mode())) return;
+        m.prefs().edit().putString("tr_mode", md).putBoolean("tr_auto", !MODE_OFF.equals(md)).apply();
+        paintMode();
+        statusLine();
+    }
 
     View build() {
         final int TXT = Main.TXT, ACC = Main.ACC, ON_ACC = Main.ON_ACC, FIELD = Main.FIELD, DIM = Main.DIM;
@@ -70,25 +107,37 @@ final class MainTr {
         in.setTextSize(16);
         in.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE);
         f.body.addView(in);
+
         String keep = m.prefs().getString("tr_in", "");
         if (!keep.isEmpty()) in.setText(keep);
 
-        // 第一行：即时 / 词典 两个开关 + 状态
+        // 第一行：三档（关 / 即时 / 仅词典）+ 词典开关
         LinearLayout r1 = new LinearLayout(m);
         r1.setGravity(Gravity.CENTER_VERTICAL);
         r1.setPadding(0, m.dp(6), 0, 0);
-        autoSw = new Switch(m);
-        autoSw.setChecked(pref("auto", true));
-        autoSw.setOnCheckedChangeListener((v, on) -> { if (!autoSilent) setPref("auto", on); statusLine(); });
-        r1.addView(autoSw);
-        r1.addView(m.text(Tr.s(m, "Live", "即时"), 13, TXT, false));
+        mOff = m.button(Tr.s(m, "Off", "关"), FIELD, TXT);
+        mLive = m.button(Tr.s(m, "Live", "即时"), FIELD, TXT);
+        mDict = m.button(Tr.s(m, "Dict only", "仅词典"), FIELD, TXT);
+        Button[] seg = {mOff, mLive, mDict};
+        for (int k = 0; k < seg.length; k++) {
+            Button b = seg[k];
+            b.setTextSize(12);
+            b.setAllCaps(false);
+            b.setPadding(0, 0, 0, 0);
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, m.dp(34), 1);
+            if (k > 0) lp.leftMargin = m.dp(4);
+            r1.addView(b, lp);
+        }
+        mOff.setOnClickListener(v -> setMode(MODE_OFF));
+        mLive.setOnClickListener(v -> setMode(MODE_LIVE));
+        mDict.setOnClickListener(v -> setMode(MODE_DICT));
         dictSw = new Switch(m);
         dictSw.setChecked(pref("dict", true));
-        dictSw.setOnCheckedChangeListener((v, on) -> { setPref("dict", on); statusLine(); });
+        dictSw.setOnCheckedChangeListener((v, on) -> { if (!autoSilent) setPref("dict", on); statusLine(); });
         LinearLayout.LayoutParams dl = new LinearLayout.LayoutParams(-2, -2);
-        dl.leftMargin = m.dp(14);
+        dl.leftMargin = m.dp(10);
         r1.addView(dictSw, dl);
-        r1.addView(m.text(Tr.s(m, "Dictionary", "词典"), 13, TXT, false));
+        r1.addView(m.text(Tr.s(m, "Dict", "词典"), 12, TXT, false));
         f.body.addView(r1);
 
         // 第二行：翻译 / 清空 / LLM（预留）/ ⚙（模型与词典的管理，导出模型包也在这里）
@@ -129,19 +178,27 @@ final class MainTr {
             public void onTextChanged(CharSequence c, int a, int b, int d) { }
             public void afterTextChanged(android.text.Editable e) {
                 m.prefs().edit().putString("tr_in", e.toString()).apply();
-                if (!autoSw.isChecked() || ENG_CLOUD.equals(engine())) return;
+                m.ui.removeCallbacks(assocTick);
+                String word = currentWord();
+                if (!assocOn() || dictSw == null || !dictSw.isChecked() || assocSuppress || word.isEmpty()) hideAssoc();
+                else m.ui.postDelayed(assocTick, 300);
+                String md = mode();
+                if (MODE_OFF.equals(md)) return;
+                if (MODE_LIVE.equals(md) && ENG_CLOUD.equals(engine())) return;   // 云端即时 = 每打一个字一次付费请求
                 m.ui.removeCallbacks(tick);
                 if (e.toString().trim().isEmpty()) return;
                 m.ui.postDelayed(tick, 500);
             }
         });
 
-        syncLiveSwitch();
+        paintMode();
         in.setOnFocusChangeListener((v, has) -> {                    // 点输入框才把本地引擎挂上（用户要求：不点不占内存）
             if (has && ENG_LOCAL.equals(engine()) && TrLlm.installed(m) && !TrLlm.ready() && !TrLlm.loading())
                 new Thread(() -> { TrLlm.start(m); m.ui.post(this::statusLine); }, "hymt-load").start();
         });
-        if (in.getText().toString().trim().length() > 0 && autoSw.isChecked()) m.ui.postDelayed(tick, 900);
+        if (in.getText().toString().trim().length() > 0 && !MODE_OFF.equals(mode())) m.ui.postDelayed(tick, 900);
+        if (m.mainScroll != null)
+            m.mainScroll.getViewTreeObserver().addOnScrollChangedListener(this::hideAssoc);   // 列表是独立窗口，页面一滚就收起
         new Thread(() -> { TrDict.ensure(m); m.ui.post(this::statusLine); }).start();   // 词典 1.4 MB：先读好，打字时就不卡
         TrMlKit.refresh(m, st -> statusLine());
         box = card;
@@ -161,65 +218,55 @@ final class MainTr {
                 ? Tr.f(m, "dictionary %d entries", "词典 %d 条", n) : Tr.s(m, "dictionary off", "词典关闭");
         String engName = ENG_CLOUD.equals(engine()) ? Tr.s(m, "Cloud LLM", "云端 LLM")
                 : ENG_LOCAL.equals(engine()) ? ("Hy-MT " + TrLlm.cur(m).id.replace("125", "1.25bit")) : "ML Kit";
-        String line = engName + " · " + (ENG_LOCAL.equals(engine()) ? llmStateText() : eng) + " · " + d;
+        String engState;
+        if (ENG_LOCAL.equals(engine())) engState = llmStateText();
+        else if (ENG_CLOUD.equals(engine())) engState = TrCloud.configured(m)
+                ? Tr.s(m, "API ready", "接口已配置") : Tr.s(m, "API not set", "未配置 API");
+        else engState = eng;
+        if (MODE_DICT.equals(mode())) engState = Tr.s(m, "dictionary only, no model", "仅词典，不调用模型");
+        String line = engName + " · " + engState + " · " + d;
         status.setText(line);
         if (engBtn != null) engBtn.setText(ENG_CLOUD.equals(engine()) ? Tr.s(m, "Cloud", "云端")
                 : ENG_LOCAL.equals(engine()) ? "Hy-MT" : "ML Kit");
         if (fold != null) fold.sum.setText(Tr.s(m, "zh", "中") + " → EN");
     }
 
-    /** 翻译一次：manual = 点了按钮（忽略「即时」开关），否则是输入防抖触发 */
+    /** 翻译一次：manual = 点了按钮（忽略档位），否则是输入防抖触发 */
     private void doTranslate(boolean manual) {
         if (m.prompt == null) return;
         final String src = TrEngine.normalize(in.getText().toString());
-        if (src.isEmpty()) { if (manual) Toast.makeText(m, Tr.s(m, "Type something first", "先输入中文"), Toast.LENGTH_SHORT).show(); return; }
-        if (!manual && !autoSw.isChecked()) return;
-        final int my = ++seq;
-        final boolean useDict = dictSw.isChecked();
-        final String before = status.getText().toString();
-        if (ENG_CLOUD.equals(engine())) { cloudTranslate(src, useDict, my, before); return; }
-        if (ENG_LOCAL.equals(engine())) {
-            if (!TrLlm.installed(m)) {
-                Toast.makeText(m, Tr.s(m, "Local model not downloaded (⚙)", "本地模型未下载（⚙）"), Toast.LENGTH_SHORT).show();
-                milTranslate(src, useDict, my, before);
-                return;
-            }
-            if (useDict) {                    // 标签式输入先走词典：命中就不用叫模型
-                String tags = TrEngine.dictOnly(m, src);
-                if (tags != null) {
-                    applyToPrompt(tags);
-                    status.setText(Tr.s(m, "done (dictionary)", "完成（词典）"));
-                    m.ui.postDelayed(this::statusLine, 900);
-                    return;
-                }
-            }
-            status.setText(Tr.s(m, "translating (Hy-MT)…", "本地引擎翻译中…"));
-            new Thread(() -> {
-                if (!TrLlm.ready()) TrLlm.start(m);
-                final String en = TrLlm.ready() ? TrLlm.translate(src) : null;
-                m.ui.post(() -> {
-                    if (my != seq) return;
-                    if (en != null && !en.trim().isEmpty()) {
-                        applyToPrompt(en.trim());
-                        status.setText(Tr.s(m, "done (Hy-MT local)", "完成（本地 Hy-MT）"));
-                        m.ui.postDelayed(this::statusLine, 1200);
-                    } else {
-                        status.setText(Tr.s(m, "local engine failed → ML Kit", "本地引擎不可用 → 改用 ML Kit"));
-                        milTranslate(src, useDict, my, before);
-                    }
-                });
-            }, "hymt").start();
+        if (src.isEmpty()) {
+            if (manual) Toast.makeText(m, Tr.s(m, "Type something first", "先输入中文"), Toast.LENGTH_SHORT).show();
             return;
         }
-        status.setText(Tr.s(m, "translating…", "翻译中…"));
-        TrEngine.translate(m, src, useDict, (en, ml) -> {
-            if (my != seq) return;                 // 已经有更新的一次翻译了
-            if (en == null || en.trim().isEmpty()) { status.setText(before); return; }
-            applyToPrompt(en.trim());
-            status.setText(ml ? Tr.s(m, "done (dictionary + ML Kit)", "完成（词典 + ML Kit）")
-                              : Tr.s(m, "done (dictionary)", "完成（词典）"));
-            m.ui.postDelayed(this::statusLine, 900);
-        });
+        final String md = mode();
+        if (!manual && MODE_OFF.equals(md)) return;
+        final int my = ++seq;
+        final boolean only = MODE_DICT.equals(md);
+        final String before = status.getText().toString();
+
+        final TrEngine.Plan p = TrEngine.plan(m, src, dictSw.isChecked());
+        if (!p.any() || only) {                    // 全部被词典吃掉，或者就是「仅词典」档
+            if (only && p.dictSegs == 0)
+                status.setText(Tr.s(m, "dict only · nothing matched", "仅词典 · 没有命中词条"));
+            finish(p.merge(null), p, 0, my, before);
+            return;
+        }
+        if (ENG_CLOUD.equals(engine())) cloudTranslate(p, my, before);
+        else if (ENG_LOCAL.equals(engine())) localTranslate(p, my, before);
+        else mlkitTranslate(p, my, before);
+    }
+
+    /** 写回提示词框，并说明这次是「词典几段 / 模型几段」 */
+    private void finish(String en, TrEngine.Plan p, int modelSegs, int my, String before) {
+        if (my != seq) return;
+        if (en == null || en.trim().isEmpty()) { status.setText(before); return; }
+        applyToPrompt(en.trim());
+        if (modelSegs > 0)
+            status.setText(Tr.f(m, "done · dict %1$d · model %2$d", "完成 · 词典 %1$d 段 · 模型 %2$d 段", p.dictSegs, modelSegs));
+        else if (p.dictSegs > 0)
+            status.setText(Tr.f(m, "done · dict %d", "完成 · 词典 %d 段", p.dictSegs));
+        m.ui.postDelayed(this::statusLine, 1300);
     }
 
     private void autoSiLent(Runnable r) {
@@ -227,57 +274,63 @@ final class MainTr {
         try { r.run(); } finally { autoSilent = false; }
     }
 
-    /** 云端翻译；失败自动回退本地引擎再回退 ML Kit */
-    private void cloudTranslate(String src, boolean useDict, int my, String before) {
+    /** 云端：只把词典没吃完的段发过去；失败回退本地引擎，再回退 ML Kit */
+    private void cloudTranslate(TrEngine.Plan p, int my, String before) {
         if (!TrCloud.configured(m)) {
             Toast.makeText(m, Tr.s(m, "Configure the cloud API first (⚙ → Cloud LLM)", "先配置云端 API（⚙ → 云端 LLM）"), Toast.LENGTH_SHORT).show();
-            fallbackTranslate(src, useDict, my, before);
+            fallback(p, my, before, true);
             return;
         }
         final TrTpl tpl = TrTpl.current(m);
+        final String text = p.pending;
         status.setText(Tr.s(m, "translating (cloud)…", "云端翻译中…"));
-        new Thread(() -> TrCloud.translate(m, tpl, src, (text, err) -> m.ui.post(() -> {
+        new Thread(() -> TrCloud.translate(m, tpl, text, (out, err) -> m.ui.post(() -> {
             if (my != seq) return;
-            if (text != null && !text.trim().isEmpty()) {
-                applyToPrompt(text.trim());
-                status.setText(Tr.s(m, "done (cloud)", "完成（云端）"));
-                m.ui.postDelayed(this::statusLine, 1200);
+            if (out != null && !out.trim().isEmpty()) {
+                finish(p.merge(out), p, p.pend.size(), my, before);
             } else {
                 status.setText(Tr.s(m, "cloud failed: ", "云端失败：") + err);
-                fallbackTranslate(src, useDict, my, before);
+                fallback(p, my, before, true);
             }
         })), "cloud").start();
     }
 
-    private void fallbackTranslate(String src, boolean useDict, int my, String before) {
-        if (TrLlm.installed(m)) {
-            new Thread(() -> {
-                if (!TrLlm.ready()) TrLlm.start(m);
-                final String en = TrLlm.ready() ? TrLlm.translate(src) : null;
-                m.ui.post(() -> {
-                    if (my != seq) return;
-                    if (en != null && !en.trim().isEmpty()) {
-                        applyToPrompt(en.trim());
-                        status.setText(Tr.s(m, "done (local fallback)", "完成（回退到本地）"));
-                        m.ui.postDelayed(this::statusLine, 1200);
-                    } else milTranslate(src, useDict, my, before);
-                });
-            }, "hymt-fb").start();
-            return;
-        }
-        milTranslate(src, useDict, my, before);
+    private void fallback(TrEngine.Plan p, int my, String before, boolean tryLocal) {
+        if (tryLocal && TrLlm.installed(m)) { localTranslate(p, my, before); return; }
+        mlkitTranslate(p, my, before);
     }
 
-    /** ML Kit / 词典那条老路（本地引擎失败时回退用） */
-    private void milTranslate(String src, boolean useDict, int my, String before) {
-        TrEngine.translate(m, src, useDict, (en, ml) -> {
+    private void localTranslate(TrEngine.Plan p, int my, String before) {
+        if (!TrLlm.installed(m)) {
+            Toast.makeText(m, Tr.s(m, "Local model not downloaded (⚙)", "本地模型未下载（⚙）"), Toast.LENGTH_SHORT).show();
+            mlkitTranslate(p, my, before);
+            return;
+        }
+        final String text = p.pending;
+        status.setText(Tr.s(m, "translating (Hy-MT)…", "本地引擎翻译中…"));
+        new Thread(() -> {
+            if (!TrLlm.ready()) TrLlm.start(m);
+            final String en = TrLlm.ready() ? TrLlm.translate(text) : null;
+            m.ui.post(() -> {
+                if (my != seq) return;
+                if (en != null && !en.trim().isEmpty()) {
+                    finish(p.merge(en), p, p.pend.size(), my, before);
+                } else {
+                    status.setText(Tr.s(m, "local engine failed → ML Kit", "本地引擎不可用 → 改用 ML Kit"));
+                    mlkitTranslate(p, my, before);
+                }
+            });
+        }, "hymt").start();
+    }
+
+    /** ML Kit：整串一次翻（它不支持批量），没有模型时就保留中文，用户能看见哪些词没翻出来 */
+    private void mlkitTranslate(TrEngine.Plan p, int my, String before) {
+        if (!TrMlKit.ready()) { finish(p.merge(null), p, 0, my, before); return; }
+        final String text = p.pending;
+        TrMlKit.translateOne(m, text, en -> m.ui.post(() -> {
             if (my != seq) return;
-            if (en == null || en.trim().isEmpty()) { status.setText(before); return; }
-            applyToPrompt(en.trim());
-            status.setText(ml ? Tr.s(m, "done (dictionary + ML Kit)", "完成（词典 + ML Kit）")
-                              : Tr.s(m, "done (dictionary)", "完成（词典）"));
-            m.ui.postDelayed(this::statusLine, 900);
-        });
+            finish(p.merge(en), p, p.pend.size(), my, before);
+        }));
     }
 
     private String llmStateText() {
@@ -321,7 +374,7 @@ final class MainTr {
                         setEngine(ENG_CLOUD);
                         new Thread(TrLlm::stop).start();
                     }
-                    syncLiveSwitch();
+                    paintMode();
                     statusLine();
                 }).show();
     }
@@ -330,16 +383,34 @@ final class MainTr {
         return ENG_CLOUD.equals(engine()) ? 2 : ENG_LOCAL.equals(engine()) ? 1 : 0;
     }
 
-    /** 云端模式禁掉"即时翻译"：不然每打一个字就是一次付费请求 */
-    private void syncLiveSwitch() {
-        if (autoSw == null) return;
+    /** 刷新三档按钮：云端不能选「即时」（每打一个字就是一次付费请求），「仅词典」不受影响 */
+    private void paintMode() {
+        if (mOff == null) return;
+        String md = mode();
+        if (ENG_CLOUD.equals(engine()) && MODE_LIVE.equals(md)) {
+            m.prefs().edit().putString("tr_mode", MODE_OFF).putBoolean("tr_auto", false).apply();
+            md = MODE_OFF;
+        }
+        tint(mOff, MODE_OFF.equals(md));
+        tint(mLive, MODE_LIVE.equals(md));
+        tint(mDict, MODE_DICT.equals(md));
         boolean cloud = ENG_CLOUD.equals(engine());
-        autoSiLent(() -> {
-            autoSw.setEnabled(!cloud);
-            if (cloud) autoSw.setChecked(false);
-            else if (!autoSw.isChecked()) autoSw.setChecked(pref("auto", true));
-        });
-        if (cloud) m.ui.removeCallbacks(tick);
+        mLive.setEnabled(!cloud);
+        mLive.setAlpha(cloud ? .4f : 1f);
+        final boolean only = MODE_DICT.equals(md);
+        if (dictSw != null)
+            autoSiLent(() -> {
+                if (only) dictSw.setChecked(true);
+                else dictSw.setChecked(pref("dict", true));   // 还原用户自己的开关，不把「仅词典」的强制值写进设置
+                dictSw.setEnabled(!only);
+            });
+        if (MODE_OFF.equals(md)) m.ui.removeCallbacks(tick);
+    }
+
+    /** 和 m.button() 一样的圆角，只是选中态单独画（不能 setBackgroundColor，会把圆角削掉） */
+    private void tint(Button b, boolean on) {
+        b.setBackground(on ? m.grad(14) : m.bg(Main.FIELD, 14));
+        b.setTextColor(on ? Main.ON_ACC : Main.TXT);
     }
 
     private void downloadLlm() {
@@ -408,6 +479,118 @@ final class MainTr {
             m.prompt.setText(en);
             m.prompt.setSelection(m.prompt.getText().length());
         } catch (Throwable ignored) { }
+    }
+
+    // ───────────────────────── 输入联想 ─────────────────────────
+
+    private boolean assocOn() { return m.prefs().getBoolean("tr_assoc", true); }
+
+    /** 光标前那一段连续中文（遇到逗号、空格、括号、英文就断），没有就返回空串 */
+    private String currentWord() {
+        if (in == null) return "";
+        String s = in.getText().toString();
+        int end = in.getSelectionEnd();
+        if (end < 0 || end > s.length()) end = s.length();
+        int i = end;
+        while (i > 0 && TrDict.cjk(s.charAt(i - 1))) i--;
+        return s.substring(i, end);
+    }
+
+    /** 后台查词表，回来时确认这个词还是当前词（用户可能已经又改了） */
+    private void doAssoc() {
+        if (in == null) return;
+        final String word = currentWord();
+        if (word.isEmpty()) { hideAssoc(); return; }
+        new Thread(() -> {
+            final ArrayList<String[]> got = TrDict.search(word, 60);
+            m.ui.post(() -> {
+                if (!word.equals(currentWord())) return;
+                fillAssoc(got);
+            });
+        }, "tr-assoc").start();
+    }
+
+    private void fillAssoc(ArrayList<String[]> rows) {
+        if (rows.isEmpty()) { hideAssoc(); return; }
+        ensureAssocPopup();
+        assocRows.clear();
+        assocRows.addAll(rows);
+        assocAdapter.notifyDataSetChanged();
+        assocListView.setSelection(0);
+        int h = Math.min(rows.size(), 10) * m.dp(24) + m.dp(2);
+        int w = Math.max(m.dp(160), in.getWidth());
+        assocPopup.setWidth(w);
+        assocPopup.setHeight(h);
+        if (assocPopup.isShowing()) assocPopup.update(in, 0, m.dp(4), w, h);
+        else assocPopup.showAsDropDown(in, 0, m.dp(4));
+    }
+
+    private void ensureAssocPopup() {
+        if (assocPopup != null) return;
+        assocPopup = new PopupWindow(m);
+        assocListView = new ListView(m);
+        assocListView.setDivider(null);
+        assocListView.setDividerHeight(0);
+        assocListView.setVerticalScrollBarEnabled(true);
+        assocAdapter = new BaseAdapter() {
+            public int getCount() { return assocRows.size(); }
+            public Object getItem(int i) { return assocRows.get(i); }
+            public long getItemId(int i) { return i; }
+            public View getView(int i, View c, ViewGroup p) {
+                TextView t = c instanceof TextView ? (TextView) c : null;
+                if (t == null) {
+                    t = new TextView(m);
+                    t.setTextSize(12);
+                    t.setTextColor(Main.DIM);
+                    t.setSingleLine(true);
+                    t.setEllipsize(android.text.TextUtils.TruncateAt.END);
+                    t.setPadding(m.dp(12), m.dp(4), m.dp(12), m.dp(4));
+                    t.setGravity(Gravity.CENTER_VERTICAL);
+                }
+                t.setText(assocRows.get(i)[0] + "  ·  " + assocRows.get(i)[1]);
+                return t;
+            }
+        };
+        assocListView.setAdapter(assocAdapter);
+        assocListView.setOnItemClickListener((p, v, pos, id) -> {
+            if (pos < 0 || pos >= assocRows.size()) return;
+            String zh = assocRows.get(pos)[0];
+            hideAssoc();
+            pickAssoc(zh);
+        });
+        assocPopup.setContentView(assocListView);
+        assocPopup.setBackgroundDrawable(m.bg(Main.FIELD, 10));
+        assocPopup.setFocusable(false);            // 不抢输入框焦点，键盘不收
+        assocPopup.setTouchable(true);
+        assocPopup.setOutsideTouchable(true);      // 点外面消失
+        assocPopup.setInputMethodMode(PopupWindow.INPUT_METHOD_NOT_NEEDED);
+    }
+
+    /** 点联想项：把光标前那个中文词换成它，光标放到词尾（继续用中文，不换成英文标签） */
+    private void pickAssoc(String zh) {
+        if (in == null) return;
+        android.text.Editable e = in.getText();
+        String s = e.toString();
+        int end = in.getSelectionEnd();
+        if (end < 0 || end > s.length()) end = s.length();
+        int start = end;
+        while (start > 0 && TrDict.cjk(s.charAt(start - 1))) start--;
+        assocSuppress = true;
+        try {
+            e.replace(start, end, zh);
+            in.setSelection(Math.min(start + zh.length(), e.length()));
+        } finally { assocSuppress = false; }
+        hideAssoc();
+        in.requestFocus();                      // 选完继续打字，键盘别收
+        try {
+            android.view.inputmethod.InputMethodManager imm = (android.view.inputmethod.InputMethodManager)
+                    m.getSystemService(Main.INPUT_METHOD_SERVICE);
+            if (imm != null) imm.showSoftInput(in, 0);
+        } catch (Throwable ignored) { }
+    }
+
+    private void hideAssoc() {
+        if (assocPopup != null && assocPopup.isShowing()) assocPopup.dismiss();
     }
 
     // ───────────────────────── 管理对话框：模型 / 词典 / 导出导入 ─────────────────────────
@@ -511,16 +694,83 @@ final class MainTr {
 
     private TrNav.Page dictPage() {
         return nav.menu(Tr.s(m, "Dictionary", "词典"), () -> new String[]{
-                Tr.f(m, "Entries: %d", "当前条数：%d", TrDict.size()),
-                Tr.s(m, "Import my own dictionary (.tsv)", "导入我的词典（.tsv）"),
-                Tr.s(m, "Reset my dictionary", "清空我的词典")
+                Tr.f(m, "Entries: %d total", "词条：%d 条", TrDict.size()),
+                Tr.f(m, "built-in %1$d · CSV %2$d · mine %3$d",
+                        "内置 %1$d · CSV %2$d · 我的 %3$d",
+                        TrDict.builtinSize(), TrDict.csvSize(), TrDict.userSize()),
+                Tr.s(m, "Import my dictionary (.tsv / .csv)", "导入我的词典（.tsv / .csv）"),
+                Tr.s(m, "Import a danbooru CSV (tag,中文)", "导入 danbooru CSV（标签,中文）"),
+                (TrDict.csvFirst(m) ? "✓ " : "✗ ") + Tr.s(m, "CSV overrides built-in", "CSV 优先于内置"),
+                (assocOn() ? "✓ " : "✗ ") + Tr.s(m, "Suggestions while typing", "输入联想（边打边列词）"),
+                Tr.s(m, "Clear the imported CSV", "清空导入的 CSV"),
+                Tr.s(m, "Clear my dictionary", "清空我的词典"),
+                Tr.s(m, "Format examples", "格式示例")
         }, i -> {
             switch (i) {
-                case 0: nav.refresh(); break;
-                case 1: pickFile(REQ_DICT, "text/*"); break;
-                case 2: resetDict(); nav.refresh(); break;
+                case 0: case 1: nav.refresh(); break;
+                case 2: pickFile(REQ_DICT, "*/*"); break;
+                case 3: pickFile(REQ_CSV, "*/*"); break;
+                case 4:
+                    final boolean to = !TrDict.csvFirst(m);
+                    new Thread(() -> {
+                        TrDict.setCsvFirst(m, to);
+                        TrEngine.clearCache();
+                        m.ui.post(() -> { statusLine(); nav.refresh(); });
+                    }, "tr-dict-order").start();
+                    break;
+                case 5:
+                    m.prefs().edit().putBoolean("tr_assoc", !assocOn()).apply();
+                    if (!assocOn()) hideAssoc();
+                    nav.refresh();
+                    break;
+                case 6: clearDictLayer(true); nav.refresh(); break;
+                case 7: clearDictLayer(false); nav.refresh(); break;
+                case 8: nav.push(examplePage()); break;
             }
         });
+    }
+
+    /** 词典格式说明：两种文件、方向、多标签、注释、csv 直接导入 */
+    private TrNav.Page examplePage() {
+        StringBuilder b = new StringBuilder();
+        if (Tr.zh(m)) {
+            b.append("App 认两种文件，都是 UTF-8 纯文本，一行一条。\n\n");
+            b.append("一、我的词典（最高优先级，覆盖一切）\n");
+            b.append("    中文<TAB>english_tag\n");
+            b.append("    银发\tsilver_hair\n");
+            b.append("    红瞳\tred_eyes\n");
+            b.append("    便当\tbento, lunchbox\n\n");
+            b.append("二、danbooru CSV（默认只补内置没有的词）\n");
+            b.append("    english_tag,中文\n");
+            b.append("    1girl,1个女孩\n");
+            b.append("    long_hair,长发\n\n");
+            b.append("说明：\n");
+            b.append("· 分隔符用 Tab 或英文逗号都行，哪边是中文会自动判断，方向不用管；\n");
+            b.append("· 右边可以写多个标签，用逗号隔开；\n");
+            b.append("· # 开头的行是注释；\n");
+            b.append("· 中文超过 24 个字会跳过（作品名、角色全名，做匹配没意义）；\n");
+            b.append("· 传统 danbooru 中文对照 CSV（10 万行）可以直接导入，App 自动转换；\n");
+            b.append("· CSV 里有些机器翻译把角色名当成了通用词（猫女→catwoman、幽灵→gespenst），\n");
+            b.append("  所以默认不让它覆盖内置；需要完全按 CSV 走时把「CSV 优先于内置」打开。");
+        } else {
+            b.append("Two kinds of files, both plain UTF-8, one entry per line.\n\n");
+            b.append("1) My dictionary (highest priority, overrides everything)\n");
+            b.append("    chinese<TAB>english_tag\n");
+            b.append("    银发\tsilver_hair\n");
+            b.append("    便当\tbento, lunchbox\n\n");
+            b.append("2) danbooru CSV (only fills gaps in the built-in table by default)\n");
+            b.append("    english_tag,chinese\n");
+            b.append("    1girl,1个女孩\n\n");
+            b.append("Notes:\n");
+            b.append("· Tab or comma both work; the Chinese column is detected automatically.\n");
+            b.append("· Several tags on the right, separated by commas.\n");
+            b.append("· Lines starting with # are comments.\n");
+            b.append("· Chinese keys longer than 24 characters are skipped.\n");
+            b.append("· A traditional danbooru CSV (~100k lines) imports as-is.\n");
+            b.append("· Some CSV rows map character names to wrong generic tags (猫女→catwoman),\n");
+            b.append("  so the built-in table wins by default. Toggle 「CSV overrides built-in」 to flip it.");
+        }
+        return nav.text(Tr.s(m, "Dictionary format", "词典格式"), b.toString());
     }
 
     private TrNav.Page repairPage() {
@@ -593,7 +843,7 @@ final class MainTr {
 
     private String effortName(String e) {
         switch (e) {
-            case "off": return Tr.s(m, "off", "关闭");
+            case "off": return Tr.s(m, "not sent", "不发送");
             case "medium": return Tr.s(m, "medium", "中");
             case "high": return Tr.s(m, "high", "高");
             default: return Tr.s(m, "low (default)", "低（默认）");
@@ -602,7 +852,7 @@ final class MainTr {
 
     private TrNav.Page effortPage() {
         final String[] ids = {"off", "low", "medium", "high"};
-        final String[] names = {Tr.s(m, "Off (no thinking)", "关闭（不想）"), Tr.s(m, "Low (default)", "低（默认）"),
+        final String[] names = {Tr.s(m, "Not sent (server default)", "不发送（用服务商默认）"), Tr.s(m, "Low (default)", "低（默认）"),
                 Tr.s(m, "Medium", "中"), Tr.s(m, "High", "高")};
         int cur = 1;
         String e = TrCloud.effort(m);
@@ -653,6 +903,8 @@ final class MainTr {
         final java.util.List<String> got = new java.util.ArrayList<>();
         final String[] err = new String[1];
         final java.util.concurrent.CountDownLatch latch = new java.util.concurrent.CountDownLatch(1);
+        final boolean[] loaded = {false};
+        final int[] page = {0};
         final android.widget.EditText manual = m.field(Tr.s(m, "Model id", "模型名"));
         manual.setText(TrCloud.model(m));
         manual.setSingleLine(true);
@@ -662,24 +914,49 @@ final class MainTr {
             public View build(TrNav n) {
                 LinearLayout box = new LinearLayout(m);
                 box.setOrientation(LinearLayout.VERTICAL);
-                TextView info = m.text(Tr.s(m, "Fetching the model list…", "正在拉取模型列表…"), 12, Main.DIM, false);
-                box.addView(info);
-                new Thread(() -> {
-                    try { latch.await(); } catch (InterruptedException ignored) { }
-                    m.ui.post(() -> {
-                        info.setText(got.isEmpty()
-                                ? (Tr.s(m, "No list from the server", "服务器没有返回列表") + (err[0] == null ? "" : "：" + err[0]))
-                                : Tr.f(m, "%d models", "共 %d 个模型", got.size()));
-                        for (String id : got) {
-                            if (box.getChildCount() > 12) break;
-                            box.addView(n.row(id, v -> {
-                                TrCloud.save(m, TrCloud.base(m), TrCloud.key(m), id, TrCloud.temp(m), TrCloud.topP(m), TrCloud.maxTokens(m), TrCloud.extra(m));
-                                manual.setText(id);                       // 点列表也要填进输入框，不然看着像没反应
-                                Toast.makeText(m, id, Toast.LENGTH_SHORT).show();
-                            }));
-                        }
-                    });
-                }, "models-ui").start();
+                if (!loaded[0]) {                     // 还没拉到：显示提示，拉完刷新整个页面
+                    box.addView(m.text(Tr.s(m, "Fetching the model list…", "正在拉取模型列表…"), 12, Main.DIM, false));
+                    new Thread(() -> {
+                        try { latch.await(); } catch (InterruptedException ignored) { }
+                        m.ui.post(() -> { loaded[0] = true; n.refresh(); });
+                    }, "models-ui").start();
+                } else if (got.isEmpty()) {
+                    box.addView(m.text(Tr.s(m, "No list from the server", "服务器没有返回列表")
+                            + (err[0] == null ? "" : "：" + err[0]), 12, Main.DIM, false));
+                } else {
+                    // 中转站/集合站的模型列表能有几百个，一页 20 个，底部分页
+                    final int PER = 20;
+                    final int pages = (got.size() + PER - 1) / PER;
+                    if (page[0] >= pages) page[0] = pages - 1;
+                    if (page[0] < 0) page[0] = 0;
+                    box.addView(m.text(Tr.f(m, "%1$d models · page %2$d/%3$d", "共 %1$d 个模型 · 第 %2$d/%3$d 页",
+                            got.size(), page[0] + 1, pages), 12, Main.DIM, false));
+                    int from = page[0] * PER, to = Math.min(from + PER, got.size());
+                    for (int i = from; i < to; i++) {
+                        final String id = got.get(i);
+                        box.addView(n.row(id, v -> {
+                            TrCloud.save(m, TrCloud.base(m), TrCloud.key(m), id, TrCloud.temp(m), TrCloud.topP(m), TrCloud.maxTokens(m), TrCloud.extra(m));
+                            manual.setText(id);                       // 点列表也要填进输入框，不然看着像没反应
+                            Toast.makeText(m, id, Toast.LENGTH_SHORT).show();
+                        }));
+                    }
+                    if (pages > 1) {
+                        LinearLayout pager = new LinearLayout(m);
+                        pager.setGravity(Gravity.CENTER_VERTICAL);
+                        Button prev = m.button("‹", Main.FIELD, Main.TXT);
+                        prev.setEnabled(page[0] > 0);
+                        prev.setOnClickListener(v -> { if (page[0] > 0) { page[0]--; n.refresh(); } });
+                        pager.addView(prev, new LinearLayout.LayoutParams(0, m.dp(40), 1));
+                        TextView mid = m.text(page[0] + 1 + " / " + pages, 12, Main.DIM, false);
+                        mid.setGravity(Gravity.CENTER);
+                        pager.addView(mid, new LinearLayout.LayoutParams(0, m.dp(40), 1));
+                        Button next = m.button("›", Main.FIELD, Main.TXT);
+                        next.setEnabled(page[0] < pages - 1);
+                        next.setOnClickListener(v -> { if (page[0] < pages - 1) { page[0]++; n.refresh(); } });
+                        pager.addView(next, new LinearLayout.LayoutParams(0, m.dp(40), 1));
+                        box.addView(pager);
+                    }
+                }
                 box.addView(m.text(Tr.s(m, "Or type it", "或手动填写"), 12, Main.DIM, false));
                 box.addView(manual);
                 TextView save = m.button(Tr.s(m, "Save", "保存"), Main.ACC, Main.ON_ACC);
@@ -696,6 +973,7 @@ final class MainTr {
             }
         };
     }
+
 
     private void testCloud() {
         status.setText(Tr.s(m, "testing…", "测试中…"));
@@ -1118,9 +1396,16 @@ final class MainTr {
         TrMlKit.delete(m, r -> { statusLine(); if (nav != null) nav.refresh(); Toast.makeText(m, r.equals("ok") ? Tr.s(m, "Deleted", "已删除") : r, Toast.LENGTH_SHORT).show(); });
     }
 
-    private void resetDict() {
-        File u = TrDict.userFile(m);
-        if (u.isFile() && u.delete()) { TrDict.reset(); TrDict.ensure(m); statusLine(); Toast.makeText(m, Tr.s(m, "Reset", "已清空"), Toast.LENGTH_SHORT).show(); }
+    /** 清掉一层词典：csv=true 清「导入的 CSV」，false 清「我的词典」 */
+    private void clearDictLayer(boolean csv) {
+        File u = csv ? TrDict.csvFile(m) : TrDict.userFile(m);
+        if (u.isFile() && u.delete()) {
+            TrDict.reset();
+            TrDict.ensure(m);
+            TrEngine.clearCache();
+            statusLine();
+            Toast.makeText(m, Tr.s(m, "Cleared", "已清空"), Toast.LENGTH_SHORT).show();
+        }
     }
 
     private void pickFile(int req, String type) {
@@ -1130,31 +1415,37 @@ final class MainTr {
         try { m.startActivityForResult(i, req); } catch (Throwable t) { Toast.makeText(m, String.valueOf(t), Toast.LENGTH_SHORT).show(); }
     }
 
-    /** 导入用户词典：中文<TAB>english_tag，一行一条；写进 files/tr_user.tsv 后覆盖内置的同名键 */
-    void importUserDict(final Uri u) {
+    /** 导入词典文件。两种格式都能认（中文在前 / 标签在前），转换交给 TrCsv；
+     *  csvLayer=true 写 files/tr_csv.tsv（默认只补内置没有的键），false 写 files/tr_user.tsv（覆盖一切）。 */
+    void importDict(final Uri u, final boolean csvLayer) {
         new Thread(() -> {
-            int n = 0;
-            StringBuilder keep = new StringBuilder();
+            final File dst = csvLayer ? TrDict.csvFile(m) : TrDict.userFile(m);
+            final File tmp = new File(m.getCacheDir(), csvLayer ? "tr_csv.tmp" : "tr_user.tmp");
+            TrCsv.Stat st;
             try (InputStream is = m.getContentResolver().openInputStream(u);
-                 BufferedReader r = new BufferedReader(new InputStreamReader(is, "UTF-8"))) {
-                for (String l; (l = r.readLine()) != null; ) {
-                    l = l.trim();
-                    if (l.isEmpty() || l.charAt(0) == '#') continue;
-                    int t = l.indexOf('\t');
-                    if (t <= 0) t = l.indexOf(',');
-                    if (t <= 0) continue;
-                    String k = l.substring(0, t).trim(), v = l.substring(t + 1).trim();
-                    if (k.isEmpty() || v.isEmpty()) continue;
-                    keep.append(k).append('\t').append(v).append('\n');
-                    n++;
-                }
+                 OutputStream os = new FileOutputStream(tmp)) {
+                st = TrCsv.convert(is, os);
             } catch (Throwable t) {
                 final String msg = String.valueOf(t);
                 m.ui.post(() -> Toast.makeText(m, msg, Toast.LENGTH_LONG).show());
+                tmp.delete();
                 return;
             }
-            try (OutputStream os = new FileOutputStream(TrDict.userFile(m))) {
-                os.write(keep.toString().getBytes("UTF-8"));
+            if (st.err != null) {
+                final String e = st.err;
+                m.ui.post(() -> showText(Tr.s(m, "Import failed", "导入失败"), msgFor(e)));
+                tmp.delete();
+                return;
+            }
+            try {
+                if (dst.exists()) dst.delete();
+                if (!tmp.renameTo(dst)) {
+                    try (InputStream in = new FileInputStream(tmp); OutputStream out = new FileOutputStream(dst)) {
+                        byte[] b = new byte[65536];
+                        for (int r; (r = in.read(b)) > 0; ) out.write(b, 0, r);
+                    }
+                    tmp.delete();
+                }
             } catch (Throwable t) {
                 final String msg = String.valueOf(t);
                 m.ui.post(() -> Toast.makeText(m, msg, Toast.LENGTH_LONG).show());
@@ -1163,12 +1454,22 @@ final class MainTr {
             TrDict.reset();
             TrDict.ensure(m);
             TrEngine.clearCache();
-            final int cnt = n;
+            final TrCsv.Stat ok = st;
             m.ui.post(() -> {
                 statusLine();
-                Toast.makeText(m, Tr.f(m, "%d entries imported", "已导入 %d 条", cnt), Toast.LENGTH_LONG).show();
+                if (nav != null) nav.refresh();
+                Toast.makeText(m, Tr.f(m, "%1$d entries (skipped %2$d)", "已导入 %1$d 条（跳过 %2$d）",
+                        ok.keys, ok.overlength + ok.bad), Toast.LENGTH_LONG).show();
             });
         }).start();
+    }
+
+    /** TrCsv 的错误码 → 给人看的话 */
+    private String msgFor(String e) {
+        if ("no-cjk".equals(e)) return Tr.s(m, "No Chinese in either column — is this a zh/en dictionary?", "两列里都没有中文，这不像中英对照表。");
+        if ("nothing-usable".equals(e)) return Tr.s(m, "Nothing usable after filtering.", "过滤之后没有可用的条目。");
+        if ("empty".equals(e)) return Tr.s(m, "The file is empty.", "文件是空的。");
+        return e;
     }
 
     /** 只把 ML Kit 自己那一份模型文件打包导出（不再用「大于 512 KB 就收」的粗暴规则：

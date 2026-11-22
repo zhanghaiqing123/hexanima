@@ -70,24 +70,26 @@ final class TrCloud {
     };
 
     /** "思考强度"按服务商翻译成各自的字段；用户的"附加 JSON"最后覆盖 */
+    /** 「不发送」= 这个参数一个都不带：有的模型没有 reasoning_effort，有的思考开关字段也不一样，
+     *  与其猜一个关闭值，不如交给服务商默认 */
     static JSONObject effortFields(Context c) {
         JSONObject o = new JSONObject();
         String e = effort(c);
-        boolean on = !"off".equals(e);
+        if ("off".equals(e)) return o;
         try {
             switch (provider(c)) {
                 case "deepseek":
-                    o.put("thinking", new JSONObject().put("type", on ? "enabled" : "disabled"));
-                    if (on) o.put("reasoning_effort", e);
+                    o.put("thinking", new JSONObject().put("type", "enabled"));
+                    o.put("reasoning_effort", e);
                     break;
                 case "qwen":
-                    o.put("enable_thinking", on);
+                    o.put("enable_thinking", true);
                     break;
                 case "glm":
-                    o.put("thinking", new JSONObject().put("type", on ? "enabled" : "disabled"));
+                    o.put("thinking", new JSONObject().put("type", "enabled"));
                     break;
                 default:
-                    if (on) o.put("reasoning_effort", e);
+                    o.put("reasoning_effort", e);
                     break;
             }
         } catch (Exception ignored) { }
