@@ -50,6 +50,7 @@ ayanoby/hexanima                 原版：NPU 内核、模型包、App 本体（
 | v3 | `HexAnima-1.9.5-v73-localapi-v3.apk` | `1.9.5-v73+api3d` | 模型导出/导入、离线目录、检查点文件夹转换、模型页 MODEL BACKUP 卡片 |
 | v4 | `HexAnima-1.9.5-v73-localapi-v4.apk` | `1.9.5-v73+api4` | 上游 1.8.3 六项功能 + 备份界面中英双语 |
 | v5 | `HexAnima-1.9.5-v73-localapi-v5.apk` | `1.9.5-v73+api5` | 修复本地 `.safetensors` 转换识别 + 转换界面中文化 |
+| v31 | `HexAnima-1.9.5-v73-localapi-v31.apk` | `1.9.5-v73+api31` | 修 v30 模型页闪退（复用的输入框重复 addView，先摘旧父容器） |
 | v30 | `HexAnima-1.9.5-v73-localapi-v30.apk` | `1.9.5-v73+api30` | 云端模型列表分页（每页 20、‹ › 翻页）；思考强度「关闭」改成「不发送」（请求不带任何思考参数） |
 | v29 | `HexAnima-1.9.5-v73-localapi-v29.apk` | `1.9.5-v73+api29` | 联想列表换成独立 PopupWindow（不嵌在卡片里）：滚动不再被主界面抢，ListView 自带滚动条，最多 10 行 |
 | v28 | `HexAnima-1.9.5-v73-localapi-v28.apk` | `1.9.5-v73+api28` | 修 v27 联想列表：滚不动（外层 ScrollView 抢手势）→ 按住列表时禁止父级拦截；行距 31→24dp，一屏 10 行 |
@@ -247,7 +248,7 @@ data: {"type":"error","message":"..."}
 
 ---
 
-## 新增功能（v1 → v30）
+## 新增功能（v1 → v31）
 
 ### v1 · 本地接口
 8081 HTTP/SSE；反射驱动 App 自己的生成流程（同一套 UI 管线、同一份设置）。
@@ -283,6 +284,11 @@ v3/v4 的转换界面会把**任何**文件都判成 “not an Anima DiT”（�
 * 转换出的模型目录补写 `hdr.bin`（源文件的 safetensors 头），stub 由它生成，导出/再导入可以重建；
   另加 `.custom` 标记，并在转换前检查基础文件（文本编码器 / VAE）是否已下载——否则模型会“转完看不见”。
 * 转换列表、进度、失败原因（缺 adaln / dtype 不支持 / 目录提供方不给真实文件…）全部中英双语。
+
+### v31 · 修模型页闪退
+
+* v30 的模型页在「拉取完成刷新」和「翻页」时会崩：模型名输入框是跨次复用的同一个 `EditText`，第二次 `addView` 时它还有父容器，Android 抛 `IllegalStateException: The specified child already has a parent`。
+* 现在 `addView` 前先 `removeView` 摘下来，翻页/刷新正常。
 
 ### v30 · 模型列表分页 / 思考强度不发送
 

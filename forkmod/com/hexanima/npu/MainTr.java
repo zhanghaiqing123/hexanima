@@ -958,6 +958,10 @@ final class MainTr {
                     }
                 }
                 box.addView(m.text(Tr.s(m, "Or type it", "或手动填写"), 12, Main.DIM, false));
+                // manual 是跨次复用的同一个 EditText（要保留用户输入）：翻页/刷新重建页面时
+                // 它可能还挂在上一份容器上，addView 前必须先摘下来，否则直接 IllegalStateException 闪退
+                if (manual.getParent() instanceof ViewGroup)
+                    ((ViewGroup) manual.getParent()).removeView(manual);
                 box.addView(manual);
                 TextView save = m.button(Tr.s(m, "Save", "保存"), Main.ACC, Main.ON_ACC);
                 save.setOnClickListener(v -> {

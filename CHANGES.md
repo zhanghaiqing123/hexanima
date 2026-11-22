@@ -5,6 +5,7 @@
 
 | 版本 | 服务版本 | APK | sha256（完整） |
 |---|---|---|---|
+| v31 | `1.9.5-v73+api31` | `HexAnima-1.9.5-v73-localapi-v31.apk` | `bb4989adef0b24e2e25c6b3b62106bb3460b5984c8a4db3f03c4e699296d6d58` |
 | v30 | `1.9.5-v73+api30` | `HexAnima-1.9.5-v73-localapi-v30.apk` | `7f572e6f5e8dcfa9e98e15439dbf32534a179ca9a7f12dfaa29a2c5e3ab2eae1` |
 | v29 | `1.9.5-v73+api29` | `HexAnima-1.9.5-v73-localapi-v29.apk` | `28ebc5ddb4fdc3fcade0ce5c89fd44d00a5ce22b8f760d590a6a882cf0f5b2da` |
 | v28 | `1.9.5-v73+api28` | `HexAnima-1.9.5-v73-localapi-v28.apk` | `d5ab6cfe2be19428812b559d570f09592136368162bbad3dfbc279b65b0cd19c` |
@@ -26,6 +27,21 @@
 | v4 | `1.9.5-v73+api4` | `HexAnima-1.9.5-v73-localapi-v4.apk` | `7626cb8ba45d8e4601e3987ea17eee11f9a5f46e9f1a99036c0ce7fb8c84f907` |
 | v3 | `1.9.5-v73+api3d` | `HexAnima-1.9.5-v73-localapi-v3.apk` | `d1ead0a46cbafda39a25930b4bccdebf237d15559898f9ce34a111de04063297` |
 | v2 | `1.9.5-v73+api3` | `HexAnima-1.9.5-v73-localapi-v2.apk` | `56304bb73c9959c65af37c59e512e818dfc84edc074f7b1bce3dc567fc91c3d7` |
+
+---
+
+## v31 — 2026-11-23
+
+**修 v30 的闪退：云端模型列表一加载完就崩。**
+
+原因：模型页里的「模型名」输入框是**跨页面重建复用**的同一个 `EditText`（这样翻页/刷新时用户手填的内容不会被清掉）。v30 新增了「拉取完成后 refresh」和「翻页 refresh」，第二次 `box.addView(manual)` 时它还挂在上一份容器上，Android 直接抛：
+
+```
+IllegalStateException: The specified child already has a parent.
+You must call removeView() on the child's parent first.
+```
+
+修法：`addView` 之前先把它从旧父容器摘下来。翻页、拉取完成、手动填写都恢复正常。
 
 ---
 
