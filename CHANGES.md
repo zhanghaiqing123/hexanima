@@ -5,6 +5,7 @@
 
 | 版本 | 服务版本 | APK | sha256（完整） |
 |---|---|---|---|
+| v32 | `1.9.5-v73+api32` | `HexAnima-1.9.5-v73-localapi-v32.apk` | `c84addca50ed1f55947d1438740886c3dbcd0db2defd3fa73344e041cbe59d4c` |
 | v31 | `1.9.5-v73+api31` | `HexAnima-1.9.5-v73-localapi-v31.apk` | `bb4989adef0b24e2e25c6b3b62106bb3460b5984c8a4db3f03c4e699296d6d58` |
 | v30 | `1.9.5-v73+api30` | `HexAnima-1.9.5-v73-localapi-v30.apk` | `7f572e6f5e8dcfa9e98e15439dbf32534a179ca9a7f12dfaa29a2c5e3ab2eae1` |
 | v29 | `1.9.5-v73+api29` | `HexAnima-1.9.5-v73-localapi-v29.apk` | `28ebc5ddb4fdc3fcade0ce5c89fd44d00a5ce22b8f760d590a6a882cf0f5b2da` |
@@ -27,6 +28,40 @@
 | v4 | `1.9.5-v73+api4` | `HexAnima-1.9.5-v73-localapi-v4.apk` | `7626cb8ba45d8e4601e3987ea17eee11f9a5f46e9f1a99036c0ce7fb8c84f907` |
 | v3 | `1.9.5-v73+api3d` | `HexAnima-1.9.5-v73-localapi-v3.apk` | `d1ead0a46cbafda39a25930b4bccdebf237d15559898f9ce34a111de04063297` |
 | v2 | `1.9.5-v73+api3` | `HexAnima-1.9.5-v73-localapi-v2.apk` | `56304bb73c9959c65af37c59e512e818dfc84edc074f7b1bce3dc567fc91c3d7` |
+
+---
+
+## v32 — 2026-11-23
+
+**修两件事：模型加载卡死后不能自愈、8081 调用把随机种子改成固定值。**
+
+### 一直停在「正在加载模型…」
+
+两个问题叠在一起：
+
+1. `anima.sh` 加载超时后只写 `load_error` 就 `exit 2`，**没有杀掉卡住的 `animad`**。这个进程还占着 7 GB 内存和 NPU 上下文；下一次点「加载模型」时 `pidof` 看到它还活着，就当成「已经加载好」直接跳过启动 —— 于是界面秒回、生成时卡住，或者又是永远加载中。
+2. 超时是 5 分钟，用户等到的只有「一直加载」，看不到原因。
+
+修法：
+
+* 超时 5 分钟 → 3 分钟（sd-cli 5 分钟 → 1 分钟）；
+* 超时后先 `sh anima.sh stop` 把进程杀掉，再把 `animad.log` 尾部写进 `load_error`，App 弹窗显示真正原因；
+* 每次 `load` 前检查：进程在但日志里没有 `serving`（上次加载失败的残留）→ 先 stop 再重启，不再误判成已加载。
+
+「修复共用模型文件」现在也会：
+
+* 先停掉可能卡住的 `animad`；
+* 除了 `common_*/` 和 `vae.bin`，把派生缓存（`lcache`/`tecache`/`req`/`sdq`）和上次运行的中间文件一起清掉 —— 它们都会自动重建，但残留的坏文件会让「重下模型也没用」；
+* 修复页直接显示 `animad.log` 尾部 15 行。
+
+### 8081 调用后种子被固定
+
+`ApiServer` 以前把请求里的 seed **写进界面的 seed 输入框**，那个输入框的监听会把它存进 prefs。于是调一次 API 之后：
+
+* 界面上的 `-1` 变成了具体数字；
+* 下次在 App 里点生成用的是这个固定种子，不再随机。
+
+现在 API 的 seed 只交给这一次 `generate()`（新字段 `apiSeed`，读一次就清空），不碰输入框、不写 prefs：界面里的 `-1` 还是 `-1`，用户自己填的数字也原样保留。
 
 ---
 

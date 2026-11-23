@@ -44,8 +44,13 @@ if [ "$1" = status ]; then if pidof $NA >/dev/null && grep -q serving $A/animad.
 KEY="${MODEL:-2}${MEGA_STREAM:+s}${MEGA_COOL:+c}${LORA:+|$LORA|${LORA_S:-1}}"   # the low-memory (streaming) mode and the LoRAs are part of the key: changing them restarts the server
 # cool mode: MEGA_COOL=1 = always; otherwise the NPU processes switch to the lower clock while $A/cool exists (the app creates it when the phone is warm)
 export MEGA_COOL_FILE=$A/cool
-if pidof $NA >/dev/null && [ "$(cat $A/model 2>/dev/null)" != "$KEY" ]; then   # loaded server holds another model (or runs in the other memory mode): restart it
-  sh $0 stop; while pidof $NA >/dev/null; do sleep 0.3; done
+if pidof $NA >/dev/null; then
+  # A server that crashed or hung during its last load is still a live pid: without clearing it the
+  # next "load" sees pidof and exits 0 as if the model were ready (that is what "it never loads
+  # again, even after re-downloading" looked like). Restart it when the log says it never served.
+  if [ "$(cat $A/model 2>/dev/null)" != "$KEY" ] || ! grep -q serving $A/animad.log 2>/dev/null; then
+    sh $0 stop; while pidof $NA >/dev/null; do sleep 0.3; done
+  fi
 fi
 if ! pidof $NA >/dev/null; then
   echo "$KEY" > $A/model
@@ -58,9 +63,10 @@ if ! pidof $NA >/dev/null; then
   cd $A && LIBS=$LIBS ADSPP=$ADSPP setsid nohup sh -c "$RUNX" sh $ANIMAD $SM --serve $ROOT < /dev/null > $A/animad.log 2>&1 &
   # a load that fails used to wait here forever: 5 minutes, then the reason goes to load_error and the app shows it
   rm -f $A/load_error; n=0
-  while ! grep -q serving $A/animad.log 2>/dev/null && [ ! -f $A/cancel ]; do sleep 0.3; n=$((n+1)); [ $n -ge 1000 ] && break; done
+  while ! grep -q serving $A/animad.log 2>/dev/null && [ ! -f $A/cancel ]; do sleep 0.3; n=$((n+1)); [ $n -ge 600 ] && break; done
   if ! grep -q serving $A/animad.log 2>/dev/null && [ ! -f $A/cancel ]; then
-    { echo "anima.sh: the NPU server did not start within 5 minutes"; tail -n 12 $A/animad.log 2>/dev/null; } > $A/load_error
+    { echo "anima.sh: the NPU server did not start within 3 minutes"; tail -n 20 $A/animad.log 2>/dev/null; } > $A/load_error
+    sh $0 stop >/dev/null 2>&1     # 别把卡住的进程留到下一次，否则下次 load 会被误判成已加载
     exit 2
   fi
 fi
@@ -70,9 +76,10 @@ if [ -z "$ANIMA_NOSERVE" ] && ! pidof $NS >/dev/null; then
   LLM=miaomiao3DHarem_animaLH3D10_txt.safetensors; [ -s $A/te_llm ] && LLM=$(cat $A/te_llm)
   cd $S && SD_SERVE=$SQ LIBS=$LIBS ADSPP=$ADSPP setsid nohup sh -c "$RUNX" sh $SDCLI --diffusion-model $DM --llm "$LLM" \
     -p x --sampling-method euler --cfg-scale 1 --steps 4 -W 512 -H 768 ${VAEARG:---taesd taew2_1.safetensors} --hires-upscalers-dir $S/upscalers --mmap -t ${T:-4} -o /sdcard/Download/anima_srv.png < /dev/null > $A/sdcli.log 2>&1 &
-  n=0; while [ ! -f $SQ/ready ] && [ ! -f $A/cancel ]; do sleep 0.1; n=$((n+1)); [ $n -ge 3000 ] && break; done
+  n=0; while [ ! -f $SQ/ready ] && [ ! -f $A/cancel ]; do sleep 0.1; n=$((n+1)); [ $n -ge 600 ] && break; done
   if [ ! -f $SQ/ready ] && [ ! -f $A/cancel ]; then
-    { echo "anima.sh: the sampler did not start within 5 minutes"; tail -n 12 $A/sdcli.log 2>/dev/null; } > $A/load_error
+    { echo "anima.sh: the sampler did not start within 1 minute"; tail -n 20 $A/sdcli.log 2>/dev/null; } > $A/load_error
+    pidof $NS >/dev/null && kill -9 $(pidof $NS)
     exit 2
   fi
 fi

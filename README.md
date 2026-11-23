@@ -50,6 +50,7 @@ ayanoby/hexanima                 原版：NPU 内核、模型包、App 本体（
 | v3 | `HexAnima-1.9.5-v73-localapi-v3.apk` | `1.9.5-v73+api3d` | 模型导出/导入、离线目录、检查点文件夹转换、模型页 MODEL BACKUP 卡片 |
 | v4 | `HexAnima-1.9.5-v73-localapi-v4.apk` | `1.9.5-v73+api4` | 上游 1.8.3 六项功能 + 备份界面中英双语 |
 | v5 | `HexAnima-1.9.5-v73-localapi-v5.apk` | `1.9.5-v73+api5` | 修复本地 `.safetensors` 转换识别 + 转换界面中文化 |
+| v32 | `HexAnima-1.9.5-v73-localapi-v32.apk` | `1.9.5-v73+api32` | 加载卡死自愈（超时 3 分钟 + 杀掉残留 animad + 修复页清派生缓存）；8081 的 seed 不再写进界面/prefs |
 | v31 | `HexAnima-1.9.5-v73-localapi-v31.apk` | `1.9.5-v73+api31` | 修 v30 模型页闪退（复用的输入框重复 addView，先摘旧父容器） |
 | v30 | `HexAnima-1.9.5-v73-localapi-v30.apk` | `1.9.5-v73+api30` | 云端模型列表分页（每页 20、‹ › 翻页）；思考强度「关闭」改成「不发送」（请求不带任何思考参数） |
 | v29 | `HexAnima-1.9.5-v73-localapi-v29.apk` | `1.9.5-v73+api29` | 联想列表换成独立 PopupWindow（不嵌在卡片里）：滚动不再被主界面抢，ListView 自带滚动条，最多 10 行 |
@@ -248,7 +249,7 @@ data: {"type":"error","message":"..."}
 
 ---
 
-## 新增功能（v1 → v31）
+## 新增功能（v1 → v32）
 
 ### v1 · 本地接口
 8081 HTTP/SSE；反射驱动 App 自己的生成流程（同一套 UI 管线、同一份设置）。
@@ -284,6 +285,12 @@ v3/v4 的转换界面会把**任何**文件都判成 “not an Anima DiT”（�
 * 转换出的模型目录补写 `hdr.bin`（源文件的 safetensors 头），stub 由它生成，导出/再导入可以重建；
   另加 `.custom` 标记，并在转换前检查基础文件（文本编码器 / VAE）是否已下载——否则模型会“转完看不见”。
 * 转换列表、进度、失败原因（缺 adaln / dtype 不支持 / 目录提供方不给真实文件…）全部中英双语。
+
+### v32 · 加载卡死自愈 / API 种子不污染设置
+
+* `anima.sh` 加载超时从 5 分钟改 3 分钟，超时后**先杀掉卡住的 animad** 再把日志尾部写进 `load_error`；每次 load 前如果进程在但日志里没有 `serving`（上次失败残留），先 stop 再重启，不再误判成已加载。
+* 「修复共用模型文件」会先停 animad，并顺带清派生缓存（lcache/tecache/req/sdq + 中间文件），页面显示 `animad.log` 尾部。
+* 8081 API 的 seed 只用于这一次生成（`apiSeed` 一次有效），不再写界面输入框、不再写 prefs —— 界面里的 `-1` 还是 `-1`。
 
 ### v31 · 修模型页闪退
 

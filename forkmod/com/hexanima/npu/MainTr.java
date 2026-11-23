@@ -1245,18 +1245,39 @@ final class MainTr {
     /** 共用文件（vae.bin / te*.bin，所有模型都用）被写坏时：删掉「已安装」标记和坏的 vae.bin，
      *  再去模型页下载任意一个模型，installCommon 就会按 manifest 的 size/sha 把缺的补回来（其它文件大小对得上会跳过） */
     private void repairCommon() {
-        File anima = new File(m.getFilesDir(), "anima");
-        StringBuilder sb = new StringBuilder();
-        for (String d : new String[]{"common", "common_v69", "common_v73", "common_v75", "common_v79", "common_v81"}) {
-            File f = new File(anima, d);
-            if (f.isDirectory()) { del(f); sb.append("removed ").append(d).append("/\n"); }
-        }
-        File vae = new File(anima, "vae.bin");
-        if (vae.isFile()) { long n = vae.length(); sb.append("vae.bin was ").append(n).append(" B, deleted\n"); vae.delete(); }
-        else sb.append("vae.bin: not present\n");
-        sb.append('\n').append(Tr.s(m, "Now open the model page and download a model again: only the missing shared files are fetched (the model weights are skipped by size).",
-                "现在去模型页重新下载任意一个模型：只会补下缺失的共用文件，模型权重因为大小对得上会被跳过。"));
-        showText(Tr.s(m, "Repair shared files", "修复共用文件"), sb.toString());
+        final File anima = new File(m.getFilesDir(), "anima");
+        new Thread(() -> {
+            StringBuilder sb = new StringBuilder();
+            // 先把可能卡在“半加载”状态的 animad 停掉：不然修完文件，下一次「加载」仍会被
+            // pidof 误判成已加载，看起来就是“修复了也没用”
+            m.su("sh " + new File(anima, "anima.sh") + " stop < /dev/null >/dev/null 2>&1", false);
+            for (String d : new String[]{"common", "common_v69", "common_v73", "common_v75", "common_v79", "common_v81"}) {
+                File f = new File(anima, d);
+                if (f.isDirectory()) { del(f); sb.append("removed ").append(d).append("/\n"); }
+            }
+            File vae = new File(anima, "vae.bin");
+            if (vae.isFile()) { long n = vae.length(); sb.append("vae.bin was ").append(n).append(" B, deleted\n"); vae.delete(); }
+            else sb.append("vae.bin: not present\n");
+            // 派生缓存和上次运行留下的中间文件一起清：它们都会自动重建，但残留的坏文件
+            // 会让「重新下载模型」看起来也没用
+            int cached = 0;
+            for (String d : new String[]{"lcache", "tecache", "req", "sdq"}) {
+                File f = new File(anima, d);
+                if (f.isDirectory()) { del(f); cached++; }
+            }
+            for (String f : new String[]{"chain_x0.raw", "chain_x0.x32", "chain_x1.x32", "chain_x2.raw",
+                    "in_x.raw", "st_ctx.raw", "te_out.raw", "ad_in.png", "cancel", "load_error", "te_llm"}) {
+                File x = new File(anima, f);
+                if (x.isFile()) { x.delete(); cached++; }
+            }
+            sb.append("derived caches: ").append(cached).append(" item(s) cleared\n");
+            sb.append("\n== animad.log (tail) ==\n");
+            tail(new File(anima, "animad.log"), sb, 15);
+            sb.append('\n').append(Tr.s(m, "Now open the model page and download a model again: only the missing shared files are fetched (the model weights are skipped by size).",
+                    "现在去模型页重新下载任意一个模型：只会补下缺失的共用文件，模型权重因为大小对得上会被跳过。"));
+            final String out = sb.toString();
+            m.ui.post(() -> showText(Tr.s(m, "Repair shared files", "修复共用文件"), out));
+        }, "repair").start();
     }
 
     /** 只删可再生的东西：LoRA 折叠缓存、文本编码器缓存、上一次运行的中间文件。模型本体（m_ 目录、sd 目录、te*.bin）一律不动 */

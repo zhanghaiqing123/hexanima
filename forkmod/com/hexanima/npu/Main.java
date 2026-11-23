@@ -57,6 +57,7 @@ public class Main extends MainEdit {
 
     LinearLayout customRow, imgBox;
     Button loadBtn, genBtn, countBtn;
+    volatile String apiSeed;   // mod: seed for one 8081-API picture; the seed field and its prefs stay untouched
     LinearLayout loraBox; TextView loraName, loraInfo; EditText strText; SeekBar strBar; Button loraPick, loraDrop; Button gptStyleBtn;
     TextView loraAuto, strLabel;   // mod: the LoRAs the next picture adds by itself, and which LoRA the strength slider edits
     final Runnable loraTick = () -> { if (loraName != null) refreshLora(); };   // debounced: the summary follows the prompt without reading the library on every key
@@ -1748,7 +1749,9 @@ public class Main extends MainEdit {
         }
         armRedo();   // mod: the hires redo takes over here, once this run is going to happen
         final String pr = pr0;
-        String sd = seed.getText().toString().trim();
+        String sd = apiSeed;                    // mod: a request from the 8081 API brings its own seed for this one picture
+        apiSeed = null;                         // 一次有效：不写界面、不写 prefs，界面里的 -1 还是 -1
+        if (sd == null) sd = seed.getText().toString().trim();
         final boolean randomSeed = newSeed || sd.isEmpty() || sd.equals("-1");   // -1 = random; the seed used is shown under the picture
         long base0 = 0; try { base0 = Long.parseLong(sd); } catch (NumberFormatException ignored) { }
         final long baseSeed = base0;
