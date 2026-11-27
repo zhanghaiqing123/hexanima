@@ -554,9 +554,15 @@ final class MainTr {
         assocListView.setAdapter(assocAdapter);
         assocListView.setOnItemClickListener((p, v, pos, id) -> {
             if (pos < 0 || pos >= assocRows.size()) return;
-            String zh = assocRows.get(pos)[0];
+            String[] row = assocRows.get(pos);
             hideAssoc();
-            pickAssoc(zh);
+            pickAssoc(row[0]);          // 输入框里的词补全成这个中文
+            appendPromptTag(row[1]);    // 同时把英文标签追加到提示词框末尾
+        });
+        assocListView.setOnItemLongClickListener((p, v, pos, id) -> {
+            if (pos < 0 || pos >= assocRows.size()) return false;
+            copyTag(assocRows.get(pos)[1]);
+            return true;                // 长按只复制，不再触发单击
         });
         assocPopup.setContentView(assocListView);
         assocPopup.setBackgroundDrawable(m.bg(Main.FIELD, 10));
@@ -589,6 +595,28 @@ final class MainTr {
         } catch (Throwable ignored) { }
     }
 
+    /** 点候选词时把英文标签追加到提示词框末尾（已有同一个标签就不重复加） */
+    private void appendPromptTag(String en) {
+        if (m.prompt == null) return;
+        String add = en == null ? "" : en.trim();
+        if (add.isEmpty()) return;
+        String cur = m.prompt.getText().toString().trim();
+        while (cur.endsWith(",")) cur = cur.substring(0, cur.length() - 1).trim();
+        for (String p : cur.split(",")) if (p.trim().equalsIgnoreCase(add)) return;
+        String out = cur.isEmpty() ? add : cur + ", " + add;
+        m.prompt.setText(out);
+        m.prompt.setSelection(m.prompt.getText().length());
+    }
+
+    /** 长按候选词：只把英文放进剪贴板 */
+    private void copyTag(String en) {
+        try {
+            android.content.ClipboardManager cm = (android.content.ClipboardManager) m.getSystemService(Main.CLIPBOARD_SERVICE);
+            if (cm != null) cm.setPrimaryClip(android.content.ClipData.newPlainText("tag", en));
+            Toast.makeText(m, Tr.s(m, "Copied: ", "已复制：") + en, Toast.LENGTH_SHORT).show();
+        } catch (Throwable ignored) { }
+    }
+
     private void hideAssoc() {
         if (assocPopup != null && assocPopup.isShowing()) assocPopup.dismiss();
     }
@@ -612,6 +640,7 @@ final class MainTr {
                 Tr.s(m, "Cloud LLM (OpenAI compatible)", "云端 LLM（OpenAI 兼容）"),
                 Tr.s(m, "Prompt templates", "提示词模板"),
                 Tr.s(m, "Built-in dictionary", "内置词典"),
+                Tr.s(m, "My dictionary (edit entries)", "个人词典（增删改）"),
                 Tr.s(m, "Repair & self-check", "修复与自检")
         };
         return nav.menu(Tr.s(m, "Translation", "翻译"), items, i -> {
@@ -621,7 +650,8 @@ final class MainTr {
                 case 2: nav.push(cloudPage()); break;
                 case 3: nav.push(templatePage()); break;
                 case 4: nav.push(dictPage()); break;
-                case 5: nav.push(repairPage()); break;
+                case 5: nav.push(personalPage()); break;
+                case 6: nav.push(repairPage()); break;
             }
         });
     }
@@ -696,21 +726,19 @@ final class MainTr {
         return nav.menu(Tr.s(m, "Dictionary", "词典"), () -> new String[]{
                 Tr.f(m, "Entries: %d total", "词条：%d 条", TrDict.size()),
                 Tr.f(m, "built-in %1$d · CSV %2$d · mine %3$d",
-                        "内置 %1$d · CSV %2$d · 我的 %3$d",
-                        TrDict.builtinSize(), TrDict.csvSize(), TrDict.userSize()),
-                Tr.s(m, "Import my dictionary (.tsv / .csv)", "导入我的词典（.tsv / .csv）"),
+                        "内置 %1$d · CSV %2$d · 个人 %3$d",
+                        TrDict.builtinSize(), TrDict.csvSize(), TrDict.mineSize()),
                 Tr.s(m, "Import a danbooru CSV (tag,中文)", "导入 danbooru CSV（标签,中文）"),
                 (TrDict.csvFirst(m) ? "✓ " : "✗ ") + Tr.s(m, "CSV overrides built-in", "CSV 优先于内置"),
                 (assocOn() ? "✓ " : "✗ ") + Tr.s(m, "Suggestions while typing", "输入联想（边打边列词）"),
                 Tr.s(m, "Clear the imported CSV", "清空导入的 CSV"),
-                Tr.s(m, "Clear my dictionary", "清空我的词典"),
+                Tr.s(m, "Clear the personal dictionary", "清空个人词典"),
                 Tr.s(m, "Format examples", "格式示例")
         }, i -> {
             switch (i) {
                 case 0: case 1: nav.refresh(); break;
-                case 2: pickFile(REQ_DICT, "*/*"); break;
-                case 3: pickFile(REQ_CSV, "*/*"); break;
-                case 4:
+                case 2: pickFile(REQ_CSV, "*/*"); break;
+                case 3:
                     final boolean to = !TrDict.csvFirst(m);
                     new Thread(() -> {
                         TrDict.setCsvFirst(m, to);
@@ -718,14 +746,14 @@ final class MainTr {
                         m.ui.post(() -> { statusLine(); nav.refresh(); });
                     }, "tr-dict-order").start();
                     break;
-                case 5:
+                case 4:
                     m.prefs().edit().putBoolean("tr_assoc", !assocOn()).apply();
                     if (!assocOn()) hideAssoc();
                     nav.refresh();
                     break;
-                case 6: clearDictLayer(true); nav.refresh(); break;
-                case 7: clearDictLayer(false); nav.refresh(); break;
-                case 8: nav.push(examplePage()); break;
+                case 5: clearDictLayer(true); nav.refresh(); break;
+                case 6: clearDictLayer(false); nav.refresh(); break;
+                case 7: nav.push(examplePage()); break;
             }
         });
     }
@@ -735,12 +763,12 @@ final class MainTr {
         StringBuilder b = new StringBuilder();
         if (Tr.zh(m)) {
             b.append("App 认两种文件，都是 UTF-8 纯文本，一行一条。\n\n");
-            b.append("一、我的词典（最高优先级，覆盖一切）\n");
+            b.append("一、个人词典（最高优先级，覆盖一切；只放你手动维护的那几十条）\n");
             b.append("    中文<TAB>english_tag\n");
             b.append("    银发\tsilver_hair\n");
             b.append("    红瞳\tred_eyes\n");
             b.append("    便当\tbento, lunchbox\n\n");
-            b.append("二、danbooru CSV（默认只补内置没有的词）\n");
+            b.append("二、danbooru CSV（社区大表，默认只补内置没有的词；不要导入个人词典）\n");
             b.append("    english_tag,中文\n");
             b.append("    1girl,1个女孩\n");
             b.append("    long_hair,长发\n\n");
@@ -771,6 +799,219 @@ final class MainTr {
             b.append("  so the built-in table wins by default. Toggle 「CSV overrides built-in」 to flip it.");
         }
         return nav.text(Tr.s(m, "Dictionary format", "词典格式"), b.toString());
+    }
+
+    // ───────────────────────── 个人词典（软件内增删改，优先级最高） ─────────────────────────
+
+    /** tr_user.tsv 的内容，保持插入顺序 */
+    private java.util.LinkedHashMap<String, String> loadUserDict() {
+        java.util.LinkedHashMap<String, String> d = new java.util.LinkedHashMap<>();
+        File f = TrDict.mineFile(m);
+        if (!f.isFile()) return d;
+        try (java.io.BufferedReader r = new java.io.BufferedReader(
+                new java.io.InputStreamReader(new java.io.FileInputStream(f), "UTF-8"))) {
+            for (String l; (l = r.readLine()) != null; ) {
+                if (l.isEmpty() || l.charAt(0) == '#') continue;
+                int t = l.indexOf('\t');
+                if (t <= 0) continue;
+                String k = l.substring(0, t).trim(), v = l.substring(t + 1).trim();
+                if (!k.isEmpty() && !v.isEmpty()) d.put(k, v);
+            }
+        } catch (Throwable ignored) { }
+        return d;
+    }
+
+    private boolean saveUserDict(java.util.LinkedHashMap<String, String> d) {
+        try (OutputStream os = new FileOutputStream(TrDict.mineFile(m))) {
+            StringBuilder b = new StringBuilder();
+            for (java.util.Map.Entry<String, String> e : d.entrySet())
+                b.append(e.getKey()).append('\t').append(e.getValue()).append('\n');
+            os.write(b.toString().getBytes("UTF-8"));
+            return true;
+        } catch (Throwable t) { return false; }
+    }
+
+    /** 个人词典页：头部导入/导出/新增，下面**分页**列出（每页 50，几万条也不会把界面撑爆），点一条编辑，✕ 删除 */
+    private TrNav.Page personalPage() {
+        final int[] page = {0};
+        return new TrNav.Page() {
+            public String title() { return Tr.s(m, "My dictionary", "个人词典"); }
+            public View build(final TrNav n) {
+                LinearLayout box = new LinearLayout(m);
+                box.setOrientation(LinearLayout.VERTICAL);
+                final java.util.LinkedHashMap<String, String> d = loadUserDict();
+                box.addView(m.text(Tr.f(m, "%d entries · these win over the built-in and CSV tables",
+                        "%d 条 · 优先级最高，覆盖内置词典和导入的 CSV", d.size()), 12, Main.DIM, false));
+
+                LinearLayout head = new LinearLayout(m);
+                head.setGravity(Gravity.CENTER_VERTICAL);
+                Button imp = m.button(Tr.s(m, "Import", "导入"), Main.FIELD, Main.TXT);
+                imp.setTextSize(14);
+                imp.setOnClickListener(v -> pickFile(REQ_DICT, "*/*"));
+                Button exp = m.button(Tr.s(m, "Export", "导出"), Main.FIELD, Main.TXT);
+                exp.setTextSize(14);
+                exp.setOnClickListener(v -> exportUserDict());
+                Button add = m.button(Tr.s(m, "+ Add", "＋ 新增"), Main.ACC, Main.ON_ACC);
+                add.setTextSize(14);
+                add.setOnClickListener(v -> n.push(dictEditPage(null, null)));
+                LinearLayout.LayoutParams lp1 = new LinearLayout.LayoutParams(0, m.dp(40), 1);
+                head.addView(imp, lp1);
+                LinearLayout.LayoutParams lp2 = new LinearLayout.LayoutParams(0, m.dp(40), 1);
+                lp2.leftMargin = m.dp(6);
+                head.addView(exp, lp2);
+                LinearLayout.LayoutParams lp3 = new LinearLayout.LayoutParams(0, m.dp(40), 1);
+                lp3.leftMargin = m.dp(6);
+                head.addView(add, lp3);
+                LinearLayout.LayoutParams hl = new LinearLayout.LayoutParams(-1, -2);
+                hl.topMargin = m.dp(8);
+                hl.bottomMargin = m.dp(10);
+                box.addView(head, hl);
+
+                if (d.isEmpty()) {
+                    box.addView(m.text(Tr.s(m, "Nothing yet. Tap 「+ Add」; you can also import a .tsv/.csv with 「chinese<TAB>english_tag」 lines and it is merged into this list.",
+                            "还没有词条。点「＋ 新增」加一条；也可以导入「中文<TAB>english_tag」格式的 .tsv/.csv，会合并进这个列表。"), 12, Main.DIM, false));
+                    return box;
+                }
+
+                // 一次只建一页的 View：有人把 10 万条的 CSV 导进过「我的词典」，整表渲染会直接把 App 撑爆
+                final int PER = 50;
+                final java.util.ArrayList<java.util.Map.Entry<String, String>> all =
+                        new java.util.ArrayList<>(d.entrySet());
+                final int pages = (all.size() + PER - 1) / PER;
+                if (page[0] >= pages) page[0] = pages - 1;
+                if (page[0] < 0) page[0] = 0;
+                if (pages > 1)
+                    box.addView(m.text(Tr.f(m, "page %1$d/%2$d · tap a row to edit", "第 %1$d/%2$d 页 · 点一行编辑", page[0] + 1, pages), 12, Main.DIM, false));
+                int from = page[0] * PER, to = Math.min(from + PER, all.size());
+                for (int i = from; i < to; i++) {
+                    final java.util.Map.Entry<String, String> e = all.get(i);
+                    LinearLayout row = new LinearLayout(m);
+                    row.setGravity(Gravity.CENTER_VERTICAL);
+                    row.setBackground(m.bg(Main.FIELD, 10));
+                    TextView t = m.text(e.getKey() + "   →   " + e.getValue(), 14, Main.TXT, false);
+                    t.setSingleLine(true);
+                    t.setEllipsize(android.text.TextUtils.TruncateAt.END);
+                    t.setPadding(m.dp(12), m.dp(10), m.dp(6), m.dp(10));
+                    t.setOnClickListener(v -> n.push(dictEditPage(e.getKey(), e.getValue())));
+                    row.addView(t, new LinearLayout.LayoutParams(0, -2, 1));
+                    TextView x = m.text("✕", 15, Main.DIM, true);
+                    x.setPadding(m.dp(12), m.dp(10), m.dp(14), m.dp(10));
+                    x.setOnClickListener(v -> confirmDelete(e.getKey(), n));
+                    row.addView(x);
+                    LinearLayout.LayoutParams rl = new LinearLayout.LayoutParams(-1, -2);
+                    rl.bottomMargin = m.dp(6);
+                    box.addView(row, rl);
+                }
+                if (pages > 1) {
+                    LinearLayout pager = new LinearLayout(m);
+                    pager.setGravity(Gravity.CENTER_VERTICAL);
+                    Button prev = m.button("‹", Main.FIELD, Main.TXT);
+                    prev.setEnabled(page[0] > 0);
+                    prev.setOnClickListener(v -> { if (page[0] > 0) { page[0]--; n.refresh(); } });
+                    pager.addView(prev, new LinearLayout.LayoutParams(0, m.dp(40), 1));
+                    TextView mid = m.text(page[0] + 1 + " / " + pages, 12, Main.DIM, false);
+                    mid.setGravity(Gravity.CENTER);
+                    pager.addView(mid, new LinearLayout.LayoutParams(0, m.dp(40), 1));
+                    Button next = m.button("›", Main.FIELD, Main.TXT);
+                    next.setEnabled(page[0] < pages - 1);
+                    next.setOnClickListener(v -> { if (page[0] < pages - 1) { page[0]++; n.refresh(); } });
+                    pager.addView(next, new LinearLayout.LayoutParams(0, m.dp(40), 1));
+                    box.addView(pager);
+                }
+                return box;
+            }
+        };
+    }
+
+    /** 新增 / 编辑一条词条 */
+    private TrNav.Page dictEditPage(final String zh0, final String en0) {
+        final boolean editing = zh0 != null;
+        return new TrNav.Page() {
+            public String title() { return editing ? Tr.s(m, "Edit entry", "编辑词条") : Tr.s(m, "New entry", "新增词条"); }
+            public View build(final TrNav n) {
+                LinearLayout box = new LinearLayout(m);
+                box.setOrientation(LinearLayout.VERTICAL);
+                box.addView(m.text(Tr.s(m, "Chinese", "中文"), 12, Main.DIM, false));
+                final EditText zh = m.field(Tr.s(m, "e.g. 银发", "例如：银发"));
+                zh.setText(zh0 == null ? "" : zh0);
+                box.addView(zh);
+                box.addView(m.text(Tr.s(m, "English tag(s)", "英文标签（多个用逗号隔开）"), 12, Main.DIM, false));
+                final EditText en = m.field(Tr.s(m, "e.g. silver_hair", "例如：silver_hair"));
+                en.setText(en0 == null ? "" : en0);
+                box.addView(en);
+                Button save = m.button(Tr.s(m, "Save", "保存"), Main.ACC, Main.ON_ACC);
+                save.setOnClickListener(v -> {
+                    String k = zh.getText().toString().trim();
+                    String val = en.getText().toString().trim();
+                    if (k.isEmpty() || val.isEmpty()) { Toast.makeText(m, Tr.s(m, "Fill both fields", "两项都要填"), Toast.LENGTH_SHORT).show(); return; }
+                    if (!TrEngine.hasCjk(k)) { Toast.makeText(m, Tr.s(m, "The Chinese column needs Chinese characters", "中文那一栏必须含中文"), Toast.LENGTH_SHORT).show(); return; }
+                    if (k.length() > 24) { Toast.makeText(m, Tr.s(m, "Keep it under 24 characters", "中文别超过 24 个字"), Toast.LENGTH_SHORT).show(); return; }
+                    java.util.LinkedHashMap<String, String> d = loadUserDict();
+                    if (editing && !k.equals(zh0)) d.remove(zh0);   // 改了中文键：旧键删掉，避免留一条重复的
+                    d.put(k, val);
+                    final boolean ok = saveUserDict(d);
+                    n.pop();
+                    refreshDictAsync(ok, null, Tr.s(m, "Saved", "已保存"));
+                });
+                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, m.dp(44));
+                lp.topMargin = m.dp(12);
+                box.addView(save, lp);
+                return box;
+            }
+        };
+    }
+
+    private void confirmDelete(final String zh, final TrNav n) {
+        m.builder().setTitle(Tr.s(m, "Delete this entry?", "删除这条词条？"))
+                .setMessage(zh)
+                .setPositiveButton(Tr.s(m, "Delete", "删除"), (d, w) -> {
+                    java.util.LinkedHashMap<String, String> map = loadUserDict();
+                    if (map.remove(zh) != null) refreshDictAsync(saveUserDict(map), n, Tr.s(m, "Deleted", "已删除"));
+                })
+                .setNegativeButton(Tr.s(m, "Cancel", "取消"), null).show();
+    }
+
+    /** 写盘之后重建内存里的词表（11 万条，放后台），好了再刷新页面 */
+    private void refreshDictAsync(final boolean ok, final TrNav n, final String msg) {
+        if (!ok) { Toast.makeText(m, Tr.s(m, "Write failed", "写入失败"), Toast.LENGTH_SHORT).show(); return; }
+        new Thread(() -> {
+            TrDict.reset();
+            TrDict.ensure(m);
+            TrEngine.clearCache();
+            m.ui.post(() -> {
+                if (n != null) n.refresh();
+                statusLine();
+                if (msg != null) Toast.makeText(m, msg, Toast.LENGTH_SHORT).show();
+            });
+        }, "tr-userdict").start();
+    }
+
+    /** 导出个人词典到 Download（MediaStore，不需要存储权限） */
+    private void exportUserDict() {
+        final File f = TrDict.mineFile(m);
+        if (!f.isFile() || f.length() == 0) {
+            Toast.makeText(m, Tr.s(m, "No entries yet", "还没有词条"), Toast.LENGTH_SHORT).show();
+            return;
+        }
+        new Thread(() -> {
+            String err = null;
+            try {
+                ContentValues v = new ContentValues();
+                v.put(MediaStore.MediaColumns.DISPLAY_NAME, "hexanima_user_dict.tsv");
+                v.put(MediaStore.MediaColumns.MIME_TYPE, "text/tab-separated-values");
+                v.put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS);
+                Uri out = m.getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, v);
+                if (out == null) throw new IOException("no Download entry");
+                try (InputStream is = new FileInputStream(f); OutputStream os = m.getContentResolver().openOutputStream(out)) {
+                    byte[] b = new byte[65536];
+                    for (int r; (r = is.read(b)) > 0; ) os.write(b, 0, r);
+                }
+            } catch (Throwable t) { err = String.valueOf(t); }
+            final String e = err;
+            m.ui.post(() -> Toast.makeText(m, e == null
+                    ? Tr.s(m, "Exported → Download/hexanima_user_dict.tsv", "已导出 → Download/hexanima_user_dict.tsv")
+                    : e, Toast.LENGTH_LONG).show());
+        }, "tr-dict-export").start();
     }
 
     private TrNav.Page repairPage() {
@@ -1421,9 +1662,9 @@ final class MainTr {
         TrMlKit.delete(m, r -> { statusLine(); if (nav != null) nav.refresh(); Toast.makeText(m, r.equals("ok") ? Tr.s(m, "Deleted", "已删除") : r, Toast.LENGTH_SHORT).show(); });
     }
 
-    /** 清掉一层词典：csv=true 清「导入的 CSV」，false 清「我的词典」 */
+    /** 清掉一层词典：csv=true 清「导入的 CSV」，false 清「个人词典」 */
     private void clearDictLayer(boolean csv) {
-        File u = csv ? TrDict.csvFile(m) : TrDict.userFile(m);
+        File u = csv ? TrDict.csvFile(m) : TrDict.mineFile(m);
         if (u.isFile() && u.delete()) {
             TrDict.reset();
             TrDict.ensure(m);
@@ -1444,7 +1685,7 @@ final class MainTr {
      *  csvLayer=true 写 files/tr_csv.tsv（默认只补内置没有的键），false 写 files/tr_user.tsv（覆盖一切）。 */
     void importDict(final Uri u, final boolean csvLayer) {
         new Thread(() -> {
-            final File dst = csvLayer ? TrDict.csvFile(m) : TrDict.userFile(m);
+            final File dst = csvLayer ? TrDict.csvFile(m) : TrDict.mineFile(m);
             final File tmp = new File(m.getCacheDir(), csvLayer ? "tr_csv.tmp" : "tr_user.tmp");
             TrCsv.Stat st;
             try (InputStream is = m.getContentResolver().openInputStream(u);
@@ -1462,13 +1703,39 @@ final class MainTr {
                 tmp.delete();
                 return;
             }
+            if (!csvLayer && st.keys > 2000) {
+                final int n = st.keys;
+                m.ui.post(() -> showText(Tr.s(m, "Too big for the personal dictionary", "这个文件不适合放进个人词典"),
+                        Tr.f(m, "This file has %1$d entries — that looks like a community CSV. The personal dictionary is only for the few entries you correct by hand.\n\nUse 「Built-in dictionary → Import a danbooru CSV」 for tables this size.",
+                                "这个文件有 %1$d 条，看起来是社区 CSV。个人词典只放你手动纠正的那几十条。\n\n这种规模请用「内置词典 → 导入 danbooru CSV」。", n)));
+                tmp.delete();
+                return;
+            }
             try {
-                if (dst.exists()) dst.delete();
-                if (!tmp.renameTo(dst)) {
-                    try (InputStream in = new FileInputStream(tmp); OutputStream out = new FileOutputStream(dst)) {
-                        byte[] b = new byte[65536];
-                        for (int r; (r = in.read(b)) > 0; ) out.write(b, 0, r);
+                if (csvLayer) {
+                    if (dst.exists()) dst.delete();
+                    if (!tmp.renameTo(dst)) {
+                        try (InputStream in = new FileInputStream(tmp); OutputStream out = new FileOutputStream(dst)) {
+                            byte[] b = new byte[65536];
+                            for (int r; (r = in.read(b)) > 0; ) out.write(b, 0, r);
+                        }
+                        tmp.delete();
                     }
+                } else {
+                    // 个人词典：合并进现有列表（同名的以新导入的为准），不是整表替换
+                    java.util.LinkedHashMap<String, String> cur = loadUserDict();
+                    int added = 0, replaced = 0;
+                    try (java.io.BufferedReader r = new java.io.BufferedReader(
+                            new java.io.InputStreamReader(new FileInputStream(tmp), "UTF-8"))) {
+                        for (String l; (l = r.readLine()) != null; ) {
+                            int t = l.indexOf('\t');
+                            if (t <= 0) continue;
+                            String k = l.substring(0, t).trim(), v = l.substring(t + 1).trim();
+                            if (k.isEmpty() || v.isEmpty()) continue;
+                            if (cur.put(k, v) == null) added++; else replaced++;
+                        }
+                    }
+                    if (!saveUserDict(cur)) throw new IOException("write failed");
                     tmp.delete();
                 }
             } catch (Throwable t) {

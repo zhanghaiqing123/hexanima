@@ -17,7 +17,7 @@ import java.util.LinkedHashSet;
  *    2. files/tr_csv.tsv     用户导入的 danbooru CSV 转换结果（10 万条，默认只补内置没有的键；
  *                            「CSV 优先」打开后它反过来覆盖内置 —— CSV 里有些机器翻译把角色名/作品名
  *                            当成了通用词，比如 猫女→catwoman、幽灵→gespenst，所以默认不覆盖）
- *    3. files/tr_user.tsv    我的词典，永远最高优先级，用来补词或纠正任何一条
+ *    3. files/tr_mine.tsv    个人词典（软件里手动增删改的那几十条），永远最高优先级
  *
  *  格式都是「中文<TAB>english_tag」，一行一条，# 开头是注释。右边可以写多个标签（逗号隔开）。
  *  匹配用最长匹配：从当前位置往前找最长的、能在表里命中的中文串，命中就换成标准标签。 */
@@ -25,7 +25,7 @@ final class TrDict {
     private static final Object LOCK = new Object();
     private static HashMap<String, String> map;
     private static int maxKey = 6;
-    private static int nBuiltin, nCsv, nUser;
+    private static int nBuiltin, nCsv, nMine;
     private static boolean csvFirst;
 
     private static final int PUT = 0, KEEP = 1;   // 覆盖同名键 / 只补缺
@@ -33,6 +33,9 @@ final class TrDict {
 
     private TrDict() { }
 
+    /** 个人词典：只有软件内手动维护的那几条 */
+    static File mineFile(Context c) { return new File(c.getFilesDir(), "tr_mine.tsv"); }
+    /** 老版本的「我的词典」文件（导入的 CSV 也写在这里）；启动时一次性迁移掉 */
     static File userFile(Context c) { return new File(c.getFilesDir(), "tr_user.tsv"); }
     static File csvFile(Context c) { return new File(c.getFilesDir(), "tr_csv.tsv"); }
 
@@ -47,17 +50,18 @@ final class TrDict {
         ensure(c);
     }
 
-    /** 内置 + CSV + 我的，去重后的总条数 */
+    /** 内置 + CSV + 个人词典，去重后的总条数 */
     static int size() { synchronized (LOCK) { return map == null ? 0 : map.size(); } }
     static int builtinSize() { synchronized (LOCK) { return nBuiltin; } }
     static int csvSize() { synchronized (LOCK) { return nCsv; } }
-    static int userSize() { synchronized (LOCK) { return nUser; } }
+    static int mineSize() { synchronized (LOCK) { return nMine; } }
 
     static boolean ready() { synchronized (LOCK) { return map != null; } }
 
     static void ensure(Context c) {
         synchronized (LOCK) {
             if (map != null) return;
+            migrateOldUser(c);          // 老的 tr_user.tsv 拆走（见方法注释），幂等
             HashMap<String, String> m = new HashMap<>(160000);
             boolean first = csvFirst(c);
             int mx = 0;
@@ -76,11 +80,11 @@ final class TrDict {
                 mx = Math.max(mx, r[0]);
             }
 
-            nUser = 0;
-            File uf = userFile(c);
-            if (uf.isFile()) {
-                r = read(uf, m, PUT);
-                nUser = r[2];
+            nMine = 0;
+            File mf = mineFile(c);
+            if (mf.isFile()) {
+                r = read(mf, m, PUT);
+                nMine = r[2];
                 mx = Math.max(mx, r[0]);
             }
 
@@ -88,6 +92,55 @@ final class TrDict {
             map = m;
             maxKey = Math.min(Math.max(mx, 2), MAX_KEY);
         }
+    }
+
+    /** 老版本的 files/tr_user.tsv 既放「手动词条」也放「导入的整个社区 CSV」，两者混在一个文件里。
+     *  拆开：凡是 CSV 层里也有的键（说明来自社区 CSV）留在 CSV；CSV 层里没有的键（用户手写/手改的）
+     *  放进个人词典。万一剩下的还是几千条（两份表来源不同），那就整体并进 CSV，个人词典从空开始。
+     *  迁移完删掉旧文件，所以只会做一次。 */
+    static void migrateOldUser(Context c) {
+        File old = userFile(c);
+        if (!old.isFile() || old.length() == 0) return;
+        java.util.LinkedHashMap<String, String> csv = new java.util.LinkedHashMap<>();
+        java.util.LinkedHashMap<String, String> mine = new java.util.LinkedHashMap<>();
+        loadInto(csvFile(c), csv);
+        loadInto(mineFile(c), mine);
+        try (BufferedReader r = new BufferedReader(new InputStreamReader(new FileInputStream(old), "UTF-8"))) {
+            for (String l; (l = r.readLine()) != null; ) {
+                if (l.isEmpty() || l.charAt(0) == '#') continue;
+                int t = l.indexOf('\t');
+                if (t <= 0) continue;
+                String k = l.substring(0, t).trim(), v = l.substring(t + 1).trim();
+                if (k.isEmpty() || v.isEmpty() || k.length() > MAX_KEY) continue;
+                if (csv.containsKey(k)) csv.put(k, v);      // 社区 CSV 里也有 → 它本来就是导入进来的
+                else mine.put(k, v);                        // 只有这一份 → 当作用户自己写的那几条
+            }
+        } catch (Throwable t) { return; }                  // 读失败就别动，下次再说
+        if (mine.size() > 3000) { csv.putAll(mine); mine.clear(); }   // 还是批量数据，个人词典不该有这么多
+        writeMap(csvFile(c), csv);
+        writeMap(mineFile(c), mine);
+        old.delete();
+    }
+
+    private static void loadInto(File f, java.util.LinkedHashMap<String, String> m) {
+        if (!f.isFile()) return;
+        try (BufferedReader r = new BufferedReader(new InputStreamReader(new FileInputStream(f), "UTF-8"))) {
+            for (String l; (l = r.readLine()) != null; ) {
+                if (l.isEmpty() || l.charAt(0) == '#') continue;
+                int t = l.indexOf('\t');
+                if (t <= 0) continue;
+                String k = l.substring(0, t).trim(), v = l.substring(t + 1).trim();
+                if (!k.isEmpty() && !v.isEmpty() && k.length() <= MAX_KEY) m.put(k, v);
+            }
+        } catch (Throwable ignored) { }
+    }
+
+    private static void writeMap(File f, java.util.LinkedHashMap<String, String> m) {
+        try (java.io.OutputStream os = new java.io.FileOutputStream(f)) {
+            StringBuilder b = new StringBuilder();
+            for (java.util.Map.Entry<String, String> e : m.entrySet()) b.append(e.getKey()).append('\t').append(e.getValue()).append('\n');
+            os.write(b.toString().getBytes("UTF-8"));
+        } catch (Throwable ignored) { }
     }
 
     // asset 与 files 两条路读进来的都是一张同样的表，只是来源不同
@@ -126,7 +179,7 @@ final class TrDict {
     static String exact(String k) { synchronized (LOCK) { return map == null ? null : map.get(k); } }
 
     /** 三层里任意一层变了（导入 / 清空 / 切换优先级）：丢掉已加载的表，下次用时重读 */
-    static void reset() { synchronized (LOCK) { map = null; maxKey = 6; nBuiltin = nCsv = nUser = 0; } }
+    static void reset() { synchronized (LOCK) { map = null; maxKey = 6; nBuiltin = nCsv = nMine = 0; } }
 
     // ── 匹配与替换 ────────────────────────────────────────────────────────────────
 
