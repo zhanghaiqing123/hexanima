@@ -1,5 +1,6 @@
 package com.hexanima.npu;
 
+import android.content.Intent;
 import android.content.res.ColorStateList;
 import android.content.Context;
 import android.content.SharedPreferences;
@@ -25,6 +26,10 @@ public class Settings extends Base {
     static String coolMode(Context c) { return prefs(c).getString("cool_mode", "off").equals("on") ? "on" : "off"; }
     static boolean lowRam(Context c) { return prefs(c).getBoolean("lowram", Compat.ramGb(c) < 9.5); }
     static boolean keepOn(Context c) { return prefs(c).getBoolean("keepon", true); }
+    /** 本地接口常驻：前台服务 + 通知，进程不进 cached 桶 */
+    static boolean keepApi(Context c) { return prefs(c).getBoolean("keep_api", true); }
+    /** 1×1 透明悬浮窗：让进程「有可见窗口」，降低被系统冻结的概率 */
+    static boolean keepOverlay(Context c) { return prefs(c).getBoolean("keep_overlay", false); }
     static boolean keepMeta(Context c) { return prefs(c).getBoolean("keep_meta", true); }
     /** the folder picked for saved pictures (a SAF tree URI), or null = the phone gallery (Pictures/Anima); a folder whose permission is gone counts as not set */
     static android.net.Uri pictureDir(Context c) { return dirPref(c, "pic_dir"); }
@@ -193,6 +198,26 @@ public class Settings extends Base {
                 "The NPU runs at a lower clock: the phone gets much less hot, a picture takes ~17 % longer. Off by default: the app no longer slows down or pauses by itself, the phone's own thermal framework does that."), 12, DIM, false);
         coolNote.setPadding(dp(2), 0, 0, dp(4)); c3.addView(coolNote);
         c3.addView(toggle(L.s("Экономия памяти (медленнее)", "Low-memory mode (slower)"), L.s("Веса модели читаются с накопителя при каждой картинке, а не держатся в ОЗУ. Нужно телефонам с 8 ГБ ОЗУ, на 12 ГБ не нужно.", "The model's weights are read from storage for every picture instead of staying in RAM. Needed on phones with 8 GB of RAM, not on 12 GB."), lowRam(this), on -> p.edit().putBoolean("lowram", on).apply()));   // MOSS-Image takes plain sentences: the quality-tag prefix is for the Anima models only, so the setting is hidden while MOSS is selected
+        c3.addView(toggle(Tr.s(this, "Keep the local API (8081) running", "接口常驻（保持 8081 在线）"),
+                Tr.s(this, "A low-priority notification stays in the shade. SillyTavern talks to the app while it is in the background, so this keeps the process out of the \"cached\" bucket and the 8081 probe no longer goes grey.",
+                        "通知栏常驻一条低优先级通知。酒馆在后台调用时进程不会被当成缓存进程回收，8081 的在线检测也不会立刻变灰。"),
+                keepApi(this), on -> {
+                    p.edit().putBoolean("keep_api", on).apply();
+                    if (on) DownloadService.start(getApplicationContext(), "api");
+                    else getApplicationContext().stopService(new Intent(this, DownloadService.class));
+                }));
+        c3.addView(toggle(Tr.s(this, "Keep-alive overlay (1×1 window)", "保活悬浮窗（1×1 窗口）"),
+                Tr.s(this, "A transparent 1×1 window keeps the process \"visible\", which makes the system freeze it less often. Needs the overlay permission once. Some ROMs still freeze it.",
+                        "一个 1×1 透明窗口，让进程保持「有可见窗口」，降低被系统冻结的概率。需要授权一次悬浮窗权限；部分系统仍会冻。"),
+                keepOverlay(this), on -> {
+                    p.edit().putBoolean("keep_overlay", on).apply();
+                    if (on && !android.provider.Settings.canDrawOverlays(this)) {
+                        try {
+                            startActivity(new Intent(android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION, android.net.Uri.parse("package:" + getPackageName())));
+                            Toast.makeText(this, Tr.s(this, "Allow \"Display over other apps\", then come back", "允许「显示在其他应用上层」后返回"), Toast.LENGTH_LONG).show();
+                        } catch (Throwable ignored) { }
+                    }
+                }));
 
         LinearLayout cc = card(col);
         TextView ct = text(L.s("Ключ API Civitai", "Civitai API key"), 15, TXT, true); ct.setPadding(dp(2), dp(6), 0, dp(2)); cc.addView(ct);

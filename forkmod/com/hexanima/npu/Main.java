@@ -57,6 +57,8 @@ public class Main extends MainEdit {
 
     LinearLayout customRow, imgBox;
     Button loadBtn, genBtn, countBtn;
+    private android.os.PowerManager.WakeLock wake;   // mod: 生图期间防止 CPU 休眠（不防系统冻结）
+    private android.view.View keepWin;               // mod: 1×1 保活悬浮窗
     volatile String apiSeed;   // mod: seed for one 8081-API picture; the seed field and its prefs stay untouched
     LinearLayout loraBox; TextView loraName, loraInfo; EditText strText; SeekBar strBar; Button loraPick, loraDrop; Button gptStyleBtn;
     TextView loraAuto, strLabel;   // mod: the LoRAs the next picture adds by itself, and which LoRA the strength slider edits
@@ -106,6 +108,7 @@ public class Main extends MainEdit {
         store = new Models(getFilesDir());
         main.env = pollSh.env = ctlSh.env = new String[]{D, new File(getFilesDir(), "sd").getPath(), BIN};
         installScript();
+        startKeepAlive();   // mod: 8081 常驻前台服务 + 保活悬浮窗（如果开了）
         getWindow().setNavigationBarColor(CARD);
         getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
 
@@ -625,6 +628,7 @@ public class Main extends MainEdit {
         super.onResume();
         if (Corrections.freedAnima) { Corrections.freedAnima = false; if (loaded) { loaded = false; setModelUi(false, false, ""); } }   // Corrections stopped the Anima server for Qwen
         visible = true;
+        startKeepAlive();
         ((NotificationManager) getSystemService(NOTIFICATION_SERVICE)).cancel(2);
         String del = ModelsActivity.deleted; ModelsActivity.deleted = "";
         if (!del.isEmpty() && del.equals(model) && loaded && !busy) { loaded = false; ex.submit(() -> su("sh " + D + "/anima.sh stop < /dev/null >/dev/null 2>&1", false)); }
@@ -1466,6 +1470,55 @@ public class Main extends MainEdit {
         sv.smoothScrollTo(0, 0);
     }
 
+    /** 8081 常驻：从可见的 Activity 启动前台服务（Android 12+ 从后台启动会被拦，这里启动是合法的） */
+    void startKeepAlive() {
+        try {
+            if (Settings.keepApi(this) && !DownloadService.isRunning()) DownloadService.start(this, "api");
+        } catch (Throwable ignored) { }
+        syncKeepAliveWindow();
+    }
+
+    /** 保活悬浮窗：1×1 透明窗口，让进程保持「有可见窗口」，缓解系统把进程冻住 */
+    void syncKeepAliveWindow() {
+        try {
+            boolean want = Settings.keepOverlay(this) && android.provider.Settings.canDrawOverlays(this);
+            if (want && keepWin == null) {
+                android.view.WindowManager wm = (android.view.WindowManager) getSystemService(WINDOW_SERVICE);
+                if (wm == null) return;
+                android.view.View v = new android.view.View(this);
+                android.view.WindowManager.LayoutParams lp = new android.view.WindowManager.LayoutParams(
+                        1, 1, android.view.WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                        android.view.WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                                | android.view.WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+                                | android.view.WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                        android.graphics.PixelFormat.TRANSLUCENT);
+                lp.gravity = android.view.Gravity.TOP | android.view.Gravity.START;
+                lp.x = 0; lp.y = 0;
+                wm.addView(v, lp);
+                keepWin = v;
+            } else if (!want && keepWin != null) {
+                android.view.WindowManager wm = (android.view.WindowManager) getSystemService(WINDOW_SERVICE);
+                if (wm != null) { try { wm.removeView(keepWin); } catch (Throwable ignored) { } }
+                keepWin = null;
+            }
+        } catch (Throwable ignored) { }
+    }
+
+    void acquireWake() {
+        try {
+            if (wake != null && wake.isHeld()) return;
+            android.os.PowerManager pm = (android.os.PowerManager) getSystemService(POWER_SERVICE);
+            if (pm == null) return;
+            wake = pm.newWakeLock(android.os.PowerManager.PARTIAL_WAKE_LOCK, "hexanima:gen");
+            wake.acquire(30 * 60 * 1000L);   // 兜底：30 分钟自动释放
+        } catch (Throwable ignored) { }
+    }
+
+    void releaseWake() {
+        try { if (wake != null && wake.isHeld()) wake.release(); } catch (Throwable ignored) { }
+        wake = null;
+    }
+
     String genLabel() {
         if (model.isEmpty()) return L.s("Скачать модель", "Get a model");
         long est = estSec() * count;
@@ -1770,7 +1823,8 @@ public class Main extends MainEdit {
         if (Settings.keepOn(this)) getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         if (((PowerManager) getSystemService(POWER_SERVICE)).getCurrentThermalStatus() >= PowerManager.THERMAL_STATUS_SEVERE) Toast.makeText(this, L.s("Телефон сильно нагрелся: генерация будет медленной", "The phone is very hot: generation will be slow"), Toast.LENGTH_LONG).show();
         final android.content.Context app = getApplicationContext();
-        app.startForegroundService(new Intent(app, DownloadService.class).putExtra("mode", "gen"));   // keeps the process alive when the app goes to the background
+        DownloadService.start(app, "gen");   // keeps the process alive when the app goes to the background
+        acquireWake();
         final long t0 = System.currentTimeMillis();
         previewFile().delete();
         pvTime = 0;
@@ -1828,7 +1882,9 @@ public class Main extends MainEdit {
             final int total = made;
             if (wasCancelled) loaded = false;   // Stop shut the server down
             synchronized (batchLock) { busy = false; Upscaler.npuBusy = false; cancelled = false; batchAdjustable = false; }
-            app.stopService(new Intent(app, DownloadService.class));
+            releaseWake();
+            if (Settings.keepApi(this)) DownloadService.update("api", null, -1);   // 接口常驻开着：只把通知切回去，服务不停
+            else app.stopService(new Intent(app, DownloadService.class));
             final Bitmap nb = lastBm;
             ui.post(() -> {
                 ApiServer.onFinish(this, wasCancelled, okAny, false, nb);

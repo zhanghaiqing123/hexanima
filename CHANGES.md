@@ -5,6 +5,7 @@
 
 | 版本 | 服务版本 | APK | sha256（完整） |
 |---|---|---|---|
+| v38 | `1.9.5-v73+api38` | `HexAnima-1.9.5-v73-localapi-v38.apk` | `dbd3b2933627a0765535c80915b871229c3ef340266d53c28fe82f746933c48a` |
 | v37 | `1.9.5-v73+api37` | `HexAnima-1.9.5-v73-localapi-v37.apk` | `2c941e2dea9b0aa392190ec62384139b0bffe9c89cba2ff5015e15382c70441d` |
 | v32 | `1.9.5-v73+api32` | `HexAnima-1.9.5-v73-localapi-v32.apk` | `c84addca50ed1f55947d1438740886c3dbcd0db2defd3fa73344e041cbe59d4c` |
 | v31 | `1.9.5-v73+api31` | `HexAnima-1.9.5-v73-localapi-v31.apk` | `bb4989adef0b24e2e25c6b3b62106bb3460b5984c8a4db3f03c4e699296d6d58` |
@@ -29,6 +30,19 @@
 | v4 | `1.9.5-v73+api4` | `HexAnima-1.9.5-v73-localapi-v4.apk` | `7626cb8ba45d8e4601e3987ea17eee11f9a5f46e9f1a99036c0ce7fb8c84f907` |
 | v3 | `1.9.5-v73+api3d` | `HexAnima-1.9.5-v73-localapi-v3.apk` | `d1ead0a46cbafda39a25930b4bccdebf237d15559898f9ce34a111de04063297` |
 | v2 | `1.9.5-v73+api3` | `HexAnima-1.9.5-v73-localapi-v2.apk` | `56304bb73c9959c65af37c59e512e818dfc84edc074f7b1bce3dc567fc91c3d7` |
+
+---
+
+## v38 — 2026-11-28
+
+**保活第一阶段：8081 接口常驻 + 保活悬浮窗 + WakeLock。**
+
+* **接口常驻**：App 启动/回到前台时挂一个前台服务（通知「本地接口 8081 运行中」），进程不再落进 cached 桶，酒馆在后台调用时 8081 的在线检测不会立刻变灰。设置里可关，默认开。
+* **保活悬浮窗**：1×1 透明 `TYPE_APPLICATION_OVERLAY`，让进程保持「有可见窗口」，降低被系统 SIGSTOP 冻结的概率。设置里开关，默认关；首次开启会跳「显示在其他应用上层」授权。
+* **生成期间 `PARTIAL_WAKE_LOCK`**：避免 CPU 休眠打断调度，30 分钟兜底自动释放；生成结束/取消时释放。
+* 通知条在生成时切「正在生成图片…」，结束后切回接口常驻（开关关着就停服务）。
+* 前台服务类型**仍是 `dataSync`**：aapt2 2.19（arm64 上唯一能用的版本）的 attr 表里没有 `specialUse` / `mediaProcessing`，manifest 写不进去（`incompatible with attribute foregroundServiceType`）。App 的 targetSdk 是 34，dataSync 的「每天 6 小时」限制（Android 15 对 targetSdk 35 才生效）暂时影响不到。
+* 这些都是提高「不被冻/不被杀」的概率；ColorOS 的冻结是系统级策略，不能保证根治。
 
 ---
 
