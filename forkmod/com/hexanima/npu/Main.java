@@ -455,6 +455,13 @@ public class Main extends MainEdit {
         TextView times = text("×", 18, DIM, false); times.setGravity(Gravity.CENTER);
         customRow.addView(times, new LinearLayout.LayoutParams(dp(36), -2));
         customRow.addView(hEdit, new LinearLayout.LayoutParams(0, -2, 1));
+        android.text.TextWatcher sizeColor = new android.text.TextWatcher() {
+            public void beforeTextChanged(CharSequence c, int a, int b, int d) { }
+            public void onTextChanged(CharSequence c, int a, int b, int d) { }
+            public void afterTextChanged(android.text.Editable e) { updateSizeColor(); }
+        };
+        wEdit.addTextChangedListener(sizeColor);
+        hEdit.addTextChangedListener(sizeColor);
         customRow.setVisibility(View.GONE);
         root.addView(customRow);
 
@@ -1443,6 +1450,8 @@ public class Main extends MainEdit {
         for (int[] z : sizeList()) if (z[0] == w && z[1] == h) preset = true;
         if (sizeText != null) sizeText.setText(sizeLabel(w, h) + (preset && !customOpen ? "" : "  ·  " + L.s("Свой", "Custom")));
         if (customRow != null) { customRow.setVisibility(customOpen || !preset ? View.VISIBLE : View.GONE); if (!wEdit.getText().toString().equals(String.valueOf(w)) || !hEdit.getText().toString().equals(String.valueOf(h))) { wEdit.setText(String.valueOf(w)); hEdit.setText(String.valueOf(h)); } }
+        updateHiresHint();
+        syncHiresAuto();
         if (chipName != null) chipName.setText(model.isEmpty() ? modelName() : shownModel(model));
         if (genBtn != null && !busy) genBtn.setText(genLabel());
     }
@@ -1463,6 +1472,19 @@ public class Main extends MainEdit {
     /** key of the measured time per model, size, edit / text-to-image and (Anima) step count */
     String timeKey() { return "t_" + model + "_" + resW + "x" + resH + (editBm != null && (isQwen() || isMage()) ? "_e" : "") + (isMoss() || isQwen() || isMage() ? "" : "_" + Settings.calls(this)); }
     /** rough time to a picture: the catalog speed at 512x768 scaled by the patch count, times the number of pictures */
+    /** 自定义宽高超过 6144 块（建议上限）时数字标红；不自动改数值，硬上限由 sizeError 在生成时拦 */
+    void updateSizeColor() {
+        try {
+            int w = Integer.parseInt(wEdit.getText().toString().trim());
+            int h = Integer.parseInt(hEdit.getText().toString().trim());
+            int t = (w / 16) * (h / 16);
+            boolean over = w >= 256 && h >= 256 && w % 16 == 0 && h % 16 == 0 && t > 6144;
+            int c = over ? BAD : TXT;
+            wEdit.setTextColor(c);
+            hEdit.setTextColor(c);
+        } catch (Exception e) { wEdit.setTextColor(TXT); hEdit.setTextColor(TXT); }
+    }
+
     /** 点「生成」先平滑滚回顶部：进度、状态都在上面，不滚回去用户看不到（已经在顶部就不动） */
     private void scrollTop() {
         final ScrollView sv = mainScroll;
@@ -1800,6 +1822,23 @@ public class Main extends MainEdit {
                 .setNegativeButton(L.s("Отмена", "Cancel"), null).show();
             return;
         }
+        // 超过 6144 块：先确认一次（会明显变慢、细节可能糊）。设置里勾了「始终允许」就不再问
+        if (hiresWanted() && !hiresBigOk && !prefs().getBoolean("x_hires_big_ok", false)) {
+            int[] hs = hiresSize(resW, resH, pf("x_hires_scale", 1.5f));
+            if (hs != null && (hs[0] / 16) * (hs[1] / 16) > 6144) {
+                final int pw = (hs[0] / 16) * (hs[1] / 16);
+                builder().setTitle(Tr.s(this, "Hires above 6144 blocks", "Hires 超过 6144 块"))
+                        .setMessage(Tr.f(this, "Target %1$dx%2$d = %3$d blocks. Above 6144 it becomes much slower and fine details may blur. Continue?",
+                                "目标 %1$dx%2$d = %3$d 块。超过 6144 后会明显变慢，细节也可能糊。继续吗？", hs[0], hs[1], pw))
+                        .setPositiveButton(Tr.s(this, "Continue", "继续"), (d, k) -> { hiresBigOk = true; generate(newSeed); hiresBigOk = false; })
+                        .setNeutralButton(Tr.s(this, "Always allow", "始终允许"), (d, k) -> {
+                            prefs().edit().putBoolean("x_hires_big_ok", true).apply();
+                            hiresBigOk = true; generate(newSeed); hiresBigOk = false;
+                        })
+                        .setNegativeButton(Tr.s(this, "Cancel", "取消"), null).show();
+                return;
+            }
+        }
         armRedo();   // mod: the hires redo takes over here, once this run is going to happen
         final String pr = pr0;
         String sd = apiSeed;                    // mod: a request from the 8081 API brings its own seed for this one picture
@@ -1892,7 +1931,7 @@ public class Main extends MainEdit {
                 bar.setVisibility(View.GONE);
                 if (wasCancelled) status.setText(L.s("Остановлено", "Stopped"));
                 else if (!okAny) status.setText(L.f("Ошибка генерации (лог: %s)", "Generation failed (log: %s)", isMoss() ? "files/moss/moss.log" : isQwen() ? "files/qwen/qwen.log" : isMage() ? "files/mage/mage.log" : "files/anima/animad.log"));
-                else status.setText(L.f("Готово за %.1f с", "Done in %.1f s", sec));
+                else status.setText(L.f("Готово за %.1f с", "Done in %.1f s", sec) + (hiresNote == null ? "" : " · " + hiresNote));
                 setModelUi(loaded, false, "");
                 if (calibrating) { if (okAny && !wasCancelled) ui.postDelayed(Main.this::calibNext, 600); else finishCalibration(false); }
                 if (okAny && !visible) notifyDone(app, nb, pr, total);

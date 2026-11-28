@@ -48,6 +48,8 @@ abstract class MainEdit extends MainTools {
     List<File> batchFiles = new ArrayList<>();
     abstract Fold fold(LinearLayout parent, String title, String key);
     LinearLayout extrasBox; TextView initText, adText, queueText; EditText strEdit, hsEdit, hdEdit, hnEdit;
+    CheckBox hiresAuto, hiresBig;
+    TextView hiresHint;
     LinearLayout animaInitBox; ImageView initThumb; TextView initInfo, initStrVal; Button initDrop, initMaskB; SeekBar initStr;
     File batchGridFile; final List<File> extraGrids = new ArrayList<>();   // a large batch: its first contact sheet, then the others (9 pictures each at most)
     // mod: Hires fix redo — run the second pass on a picture from the album or from the History instead of on a picture just generated
@@ -382,6 +384,25 @@ abstract class MainEdit extends MainTools {
         hdEdit = smallField(hr, "DENOISE", "x_hires_den", "0.45", true);
         hnEdit = smallField(hr, L.s("ШАГИ", "STEPS"), "x_hires_steps", "4", false);
         c.addView(hr);
+        hsEdit.setOnFocusChangeListener((v, has) -> { if (!has) clampHiresScale(); });
+        hiresAuto = new CheckBox(this);
+        hiresAuto.setText(Tr.s(this, "Auto: biggest size within 6144 blocks", "自动锁定为当前最优支持尺寸（6144 块内最大）"));
+        hiresAuto.setTextSize(11);
+        hiresAuto.setTextColor(DIM);
+        hiresAuto.setChecked(prefs().getBoolean("x_hires_auto", false));
+        hiresAuto.setOnCheckedChangeListener((v, on) -> { prefs().edit().putBoolean("x_hires_auto", on).apply(); syncHiresAuto(); });
+        c.addView(hiresAuto);
+        hiresBig = new CheckBox(this);
+        hiresBig.setText(Tr.s(this, "Allow above 6144 blocks (slower, may blur)", "允许超过 6144 块（更慢、可能糊）"));
+        hiresBig.setTextSize(11);
+        hiresBig.setTextColor(DIM);
+        hiresBig.setChecked(prefs().getBoolean("x_hires_big_ok", false));
+        hiresBig.setOnCheckedChangeListener((v, on) -> prefs().edit().putBoolean("x_hires_big_ok", on).apply());
+        c.addView(hiresBig);
+        hiresHint = text("", 11, DIM, false);
+        hiresHint.setPadding(dp(4), dp(6), 0, 0);
+        c.addView(hiresHint);
+        updateHiresHint();
         // mod: take a picture that already exists and run the hires second pass on it (no first pass, no wasted generation)
         LinearLayout hb = new LinearLayout(this); hb.setPadding(0, dp(8), 0, 0);
         Button hgal = button(Tr.s(this, "From the album", "从相册导入"), CARD, ACC); hgal.setTextSize(12); hgal.setAllCaps(false);
@@ -440,6 +461,48 @@ abstract class MainEdit extends MainTools {
         r.addView(s); r.setOnClickListener(v -> s.toggle()); parent.addView(r);
         return s;
     }
+    /** 「自动锁定」勾上时：倍率框禁用，值 = 当前分辨率下 6144 块内能放大的最大倍率；分辨率一变就重算 */
+    void syncHiresAuto() {
+        if (hiresAuto == null || hsEdit == null) return;
+        boolean on = hiresAuto.isChecked();
+        hsEdit.setEnabled(!on);
+        if (!on || resW < 256 || resH < 256) return;
+        int[] best = hiresMax(resW, resH, 6144);
+        if (best == null) return;
+        float f = Math.max(best[0] / (float) resW, best[1] / (float) resH);
+        String v = String.format(java.util.Locale.US, "%.2f", f);
+        if (!v.equals(hsEdit.getText().toString())) {
+            hsEdit.setText(v);
+            prefs().edit().putString("x_hires_scale", v).apply();
+        }
+    }
+
+    /** 倍率输入框：1.0–2.0，超过就改回 2.0（只限制最大放大倍数） */
+    void clampHiresScale() {
+        try {
+            float f = Float.parseFloat(hsEdit.getText().toString().trim().replace(',', '.'));
+            float c = Math.max(1.0f, Math.min(2.0f, f));
+            if (Math.abs(c - f) > 1e-4) {
+                String v = String.format(java.util.Locale.US, "%.2f", c);
+                hsEdit.setText(v);
+                prefs().edit().putString("x_hires_scale", v).apply();
+                Toast.makeText(this, Tr.s(this, "Hires scale is capped at 2x", "放大倍率最大 2 倍"), Toast.LENGTH_SHORT).show();
+            }
+        } catch (Exception ignored) { }
+    }
+
+    /** hires 卡片里的两行说明：当前尺寸下建议的最大放大（6144 块）和硬上限（65536 块） */
+    void updateHiresHint() {
+        if (hiresHint == null) return;
+        int w = resW, h = resH;
+        if (w < 256 || h < 256) { hiresHint.setText(""); return; }
+        int[] rec = hiresMax(w, h, 6144), hard = hiresMax(w, h, 65536);
+        String rs = rec == null ? "—" : String.format(java.util.Locale.US, "%dx%d (%.2fx)", rec[0], rec[1], Math.max(rec[0] / (double) w, rec[1] / (double) h));
+        String hs2 = hard == null ? "—" : String.format(java.util.Locale.US, "%dx%d (%.2fx)", hard[0], hard[1], Math.max(hard[0] / (double) w, hard[1] / (double) h));
+        hiresHint.setText(Tr.f(this, "Now %1$dx%2$d · recommended max %3$s (6144 blocks, normal speed) · hard max %4$s (slower above 6144)",
+                "当前 %1$dx%2$d · 建议最大 %3$s（6144 块，正常速度）· 硬上限 %4$s（超过 6144 会明显变慢）", w, h, rs, hs2));
+    }
+
     EditText smallField(LinearLayout row, String title, String key, String def, boolean decimal) {
         return numField(row, title, prefs().getString(key, def), decimal, s -> { String v = s.trim().replace(',', '.'); try { Float.parseFloat(v); prefs().edit().putString(key, v).apply(); } catch (NumberFormatException ignored) { } });
     }

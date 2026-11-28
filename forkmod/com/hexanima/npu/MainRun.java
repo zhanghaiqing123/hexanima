@@ -560,14 +560,43 @@ abstract class MainRun extends MainLora {
     /** mod: the automatic second pass is off for a manual hires redo (that run already IS the second pass) */
     boolean hiresWanted() { return !noAutoHires && prefs().getBoolean("x_hires", false); }
     /** hires target: about scale × the size, sides multiples of 16 with a patch count the NPU blocks run (multiple of 32, at most 6144) */
-    int[] hiresSize(int w, int h) {
-        double s = Math.max(1.0, Math.min(3.0, pf("x_hires_scale", 1.5f)));
-        for (; s > 1.0; s -= 0.05) {
+    int[] hiresSize(int w, int h) { return hiresSize(w, h, pf("x_hires_scale", 1.5f)); }
+    /** 从 scale 往下找最近的、真正能跑的放大尺寸（上限就是 sizeError 的 65536 块）。
+     *  合法档位很稀疏（宽高 16 的倍数、patch 数能被 32 整除），按 5% 一档找会漏掉 1.25 这种档，
+     *  所以 2% 一档往下找；倍率最多 2×。 */
+    int[] hiresSize(int w, int h, float scale) {
+        double s = Math.max(1.0, Math.min(2.0, scale));
+        for (int i = 0; i < 120; i++) {
             int w2 = (int) Math.round(w * s / 16) * 16, h2 = (int) Math.round(h * s / 16) * 16;
-            if (sizeError(w2, h2) == null) return new int[]{w2, h2};
+            if (sizeError(w2, h2) == null && (w2 > w || h2 > h)) return new int[]{w2, h2};
+            s -= 0.02;
+            if (s <= 1.0) break;
         }
         return null;
     }
+
+    /** 当前尺寸按比例最多能放大到多少：maxPatches=6144 是「正常速度」的建议线，65536 是硬上限 */
+    int[] hiresMax(int w, int h, int maxPatches) {
+        for (double s = 2.0; s > 1.0; s -= 0.02) {
+            int w2 = (int) Math.round(w * s / 16) * 16, h2 = (int) Math.round(h * s / 16) * 16;
+            if (sizeError(w2, h2) == null && (w2 / 16) * (h2 / 16) <= maxPatches && (w2 > w || h2 > h))
+                return new int[]{w2, h2};
+        }
+        return null;
+    }
+    /** 这一次 hires 大概要多少内存（和 availMb 同样的「整机 MB」口径）：
+     *  模型已加载时只剩第二遍的增量（更大的 latent + VAE 解码 + 块缓冲），
+     *  没加载时还要再加上模型本身。每百万像素按 600 MB 估，再留 10% 余量
+     *  （hires 是同一个进程的第二遍，真正的增量是更大的 latent + VAE 缓冲，没有模型那么大）。 */
+    long hiresNeed(int w, int h) {
+        long base = loaded ? 300 : 4300;
+        double mp = (double) w * h / 1000000.0;
+        return base + (long) (mp * 600 * 1.1);
+    }
+
+    // 本次 hires 被降级/跳过的说明，生成结束后并进状态行
+    String hiresNote;
+    boolean hiresBigOk;   // 本次生成已经在弹窗里确认「允许超过 6144 块」
     /** the mask scaled + cropped exactly like initFor(w, h) */
     File maskFor(int w, int h) {
         if (!maskSrc().exists() || !initSrc().exists()) return null;
@@ -605,16 +634,43 @@ abstract class MainRun extends MainLora {
     String adPrompt = ""; volatile boolean adPhase;   // the prompt of the picture being made, for the hands detail prompt
     String extrasEnv(int w, int h, long t0) {
         StringBuilder e = new StringBuilder();
+        hiresNote = null;
         if (prefs().getBoolean("x_preview", true)) e.append("PREVIEW=").append(q(previewFile().getPath())).append(" ");
-        if (availMb() < 3000 && hiresWanted()) {   // the larger passes need room: skip them rather than swap
-            ui.post(() -> Toast.makeText(this, L.s("Мало памяти: hires fix пропущен для этой картинки", "Low memory: hires fix skipped for this picture"), Toast.LENGTH_LONG).show());
-            e.append(initEnv(w, h));
-            return e.toString();
-        }
         if (hiresWanted()) {
-            int[] hs = hiresSize(w, h);
-            if (hs != null) e.append("HIRES=1 HIRES_W=").append(hs[0]).append(" HIRES_H=").append(hs[1]).append(" HIRES_DENOISE=").append(pf("x_hires_den", .45f)).append(" HIRES_STEPS=").append((int) pf("x_hires_steps", 4)).append(" ");
-            else ui.post(() -> Toast.makeText(this, L.s("Hires fix: этот размер уже максимальный для NPU", "Hires fix: this size is already the NPU's largest"), Toast.LENGTH_LONG).show());
+            final float want = Math.max(1.0f, Math.min(3.0f, pf("x_hires_scale", 1.5f)));
+            long have = availMb();
+            // 只做两道硬判断：能不能再放大（尺寸合法）、内存是不是低到离谱。
+            // 不再有「内存保护开关」和逐步降级：设多少倍就按多少跑，超尺寸时退到最近的合法档。
+            int[] hs = null;
+            float use = -1f;
+            if (have >= 500) {                       // 极端兜底（低于 500 MB 才跳过），其余交给系统
+                hs = hiresSize(w, h, want);
+                // 超过 6144 块：UI 路径会先弹窗确认（hiresBigOk），API / 没确认的路径直接落到 6144 以内
+                if (hs != null && (hs[0] / 16) * (hs[1] / 16) > 6144
+                        && !hiresBigOk && !prefs().getBoolean("x_hires_big_ok", false)) {
+                    int[] capped = hiresMax(w, h, 6144);
+                    if (capped != null) hs = capped;
+                }
+                if (hs != null) use = (float) Math.max(hs[0] / (double) w, hs[1] / (double) h);
+            }
+            if (use < 0) {
+                hiresNote = L.s("hires skipped: low memory", "hires 已跳过：内存不足");
+                ui.post(() -> Toast.makeText(this, L.s("Not enough memory for the hires pass: skipped this picture",
+                        "内存不足，这张跳过了 hires 重绘"), Toast.LENGTH_LONG).show());
+            } else if (hs == null) {
+                final String sz = w + "×" + h;
+                hiresNote = L.s("hires skipped: " + sz + " is already the NPU limit", "hires 已跳过：" + sz + " 已是 NPU 上限");
+                ui.post(() -> Toast.makeText(this, L.s("Hires fix: " + sz + " is already the largest size the NPU can run",
+                        "Hires fix：" + sz + " 已经是 NPU 能跑的最大尺寸"), Toast.LENGTH_LONG).show());
+            } else {
+                e.append("HIRES=1 HIRES_W=").append(hs[0]).append(" HIRES_H=").append(hs[1]).append(" HIRES_DENOISE=").append(pf("x_hires_den", .45f)).append(" HIRES_STEPS=").append((int) pf("x_hires_steps", 4)).append(" ");
+                if (use < want - 0.05f) {                 // 目标尺寸不合法，退到了最近的合法档
+                    final String pair = String.format(java.util.Locale.US, "%.2f → %.2f", want, use);
+                    hiresNote = L.s("hires " + pair + " (size step)", "hires 倍率 " + pair + "（尺寸档位）");
+                    ui.post(() -> Toast.makeText(this, L.s("No legal size at " + String.format(java.util.Locale.US, "%.2f", want) + "x: using " + pair,
+                            "该倍率没有合法尺寸，本次用 " + pair), Toast.LENGTH_SHORT).show());
+                }
+            }
         }
         // ADetailer runs after the picture (runOne: the picture shows first, then the faces and / or hands are detailed on it)
         e.append(initEnv(w, h));

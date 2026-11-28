@@ -5,6 +5,7 @@
 
 | 版本 | 服务版本 | APK | sha256（完整） |
 |---|---|---|---|
+| v42 | `1.9.5-v73+api42` | `HexAnima-1.9.5-v73-localapi-v42.apk` | `77ad128e9d5c0a9de21863ad34a1c394b62bca6f94d830351b5875ab92078ead` |
 | v38 | `1.9.5-v73+api38` | `HexAnima-1.9.5-v73-localapi-v38.apk` | `dbd3b2933627a0765535c80915b871229c3ef340266d53c28fe82f746933c48a` |
 | v37 | `1.9.5-v73+api37` | `HexAnima-1.9.5-v73-localapi-v37.apk` | `2c941e2dea9b0aa392190ec62384139b0bffe9c89cba2ff5015e15382c70441d` |
 | v32 | `1.9.5-v73+api32` | `HexAnima-1.9.5-v73-localapi-v32.apk` | `c84addca50ed1f55947d1438740886c3dbcd0db2defd3fa73344e041cbe59d4c` |
@@ -30,6 +31,20 @@
 | v4 | `1.9.5-v73+api4` | `HexAnima-1.9.5-v73-localapi-v4.apk` | `7626cb8ba45d8e4601e3987ea17eee11f9a5f46e9f1a99036c0ce7fb8c84f907` |
 | v3 | `1.9.5-v73+api3d` | `HexAnima-1.9.5-v73-localapi-v3.apk` | `d1ead0a46cbafda39a25930b4bccdebf237d15559898f9ce34a111de04063297` |
 | v2 | `1.9.5-v73+api3` | `HexAnima-1.9.5-v73-localapi-v2.apk` | `56304bb73c9959c65af37c59e512e818dfc84edc074f7b1bce3dc567fc91c3d7` |
+
+---
+
+## v42 — 2026-11-28
+
+**hires：超过 6144 块先确认；新增「自动锁定为当前最优支持尺寸」。**
+
+6144 块是 megarun 的 `TMAX`：以内走正常路径，超过走 chunked attention——能跑完，但明显变慢、细节会糊（实测 768×1152 放大 2 倍到 1536×2304 = 13824 块就是水彩感；512×768 放大 2 倍正好 6144 块，正常）。
+
+* 目标超过 6144 块时弹确认：「目标 1536×2304 = 13824 块…继续吗？」，可选「继续 / 始终允许 / 取消」；「始终允许」写 pref `x_hires_big_ok`，以后不再问；
+* API 触发的路径没有 UI 确认，直接截到 6144 以内（除非 pref 已允许）；
+* hires 卡片新增两个勾选框：
+  * **自动锁定为当前最优支持尺寸**（`x_hires_auto`）：勾上后倍率框禁用，值 = 当前分辨率在 6144 块内能放大的最大倍率；**分辨率一变就重算**（512×768→2.00，768×1152→1.33）；
+  * 允许超过 6144 块（`x_hires_big_ok`）。
 
 ---
 
